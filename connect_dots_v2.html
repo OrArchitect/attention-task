@@ -136,7 +136,7 @@
   </div>
 
   <footer>
-    יש ללחוץ על המספרים לפי סדר עולה. לחיצה על מספר תדגיש אותו; לחיצה נוספת עליו תחזיר אותו למצב רגיל.
+    יש ללחוץ על המספרים לפי סדר עולה. לחיצה על מספר תדגיש אותו; לחיצה נוספת עליו תאפס את הניסיון הנוכחי.
   </footer>
 
 <script>
@@ -145,9 +145,9 @@
   const CONFIG = {
     sessionMinutes: 10,   // משך סשן בדקות
     initialPoints: 12,    // כמות נקודות התחלתית
-    incrementBy: 3,       // העלאת קושי בכל משימה
-    minDistance: 30,      // מרחק מינימלי בין נקודות
-    lineAvoidDistance: 16,// מרחק מנקודה לקו – להימנע מנקודות על קווים
+    incrementBy: 2,       // העלאת קושי בכל משימה (2 נקודות)
+    minDistance: 30,
+    lineAvoidDistance: 16,
     margin: 30
   };
 
@@ -249,7 +249,6 @@
 
       let ok = true;
 
-      // מרחק מנקודות קיימות
       for (const p of pts){
         if (distance(p, candidate) < CONFIG.minDistance){
           ok = false;
@@ -258,7 +257,6 @@
       }
       if (!ok) continue;
 
-      // לא להיות קרוב מדי לקו קיים
       for (let i = 1; i < pts.length; i++){
         const d = pointToSegmentDistance(candidate, pts[i-1], pts[i]);
         if (d < CONFIG.lineAvoidDistance){
@@ -271,7 +269,6 @@
       pts.push(candidate);
     }
 
-    // אם אין מספיק נקודות – נשלים בלי תנאים
     while (pts.length < n){
       pts.push({
         x: randomBetween(m, m+W),
@@ -288,10 +285,10 @@
       index: ++taskCounter,
       points: generatePoints(n),
       selected: new Set(),
-      selectionOrder: [],      // סדר הבחירה (לקווים)
+      selectionOrder: [],
       highestCorrect: 0,
-      errors: 0,               // סך כל הטעויות במשימה
-      errorsSinceReset: 0,     // טעויות בגלגול הנוכחי של אותה משימה
+      errors: 0,
+      errorsSinceReset: 0,
       startTime: now()
     };
     draw();
@@ -305,7 +302,7 @@
     const pts = currentTask.points;
     const order = currentTask.selectionOrder;
 
-    // קודם כל – הקווים לפי סדר הבחירה
+    // קווים לפי סדר הבחירה
     if (order.length > 1){
       ctx.strokeStyle = "#e5e7eb";
       ctx.lineWidth = 2;
@@ -319,7 +316,7 @@
       ctx.stroke();
     }
 
-    // אחר כך – העיגולים והמספרים
+    // נקודות ומספרים
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "14px system-ui, Arial";
@@ -362,6 +359,14 @@
     return -1;
   }
 
+  function resetAttempt(task){
+    task.selected.clear();
+    task.selectionOrder = [];
+    task.highestCorrect = 0;
+    task.errorsSinceReset = 0;
+    draw();
+  }
+
   function handlePointerDown(ev){
     if (!running || !currentTask || pendingNextTaskPoints !== null) return;
 
@@ -378,10 +383,8 @@
     const selected = task.selected;
 
     if (selected.has(idx)){
-      // ביטול בחירה – גם מהסט וגם מסדר הבחירה
-      selected.delete(idx);
-      task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
-      draw();
+      // במקום להסיר רק נקודה – מאפסים את כל הניסיון הנוכחי
+      resetAttempt(task);
       return;
     }
 
@@ -390,7 +393,6 @@
     task.selectionOrder.push(idx);
     draw();
 
-    // מדידת נכונות/טעויות – פנימי בלבד
     const expectedIndex = task.highestCorrect;
     if (idx === expectedIndex){
       task.highestCorrect++;
@@ -399,17 +401,13 @@
       task.errorsSinceReset++;
     }
 
-    // אם הרצף 1..N נבחר (גם אם היו טעויות בדרך)
+    // הרצף 1..N הושלם
     if (task.highestCorrect >= task.points.length){
       if (task.errorsSinceReset > 0){
-        // היו טעויות – המשימה לא עוברת, חוזרים על אותה משימה בשקט
-        task.selected.clear();
-        task.selectionOrder = [];
-        task.highestCorrect = 0;
-        task.errorsSinceReset = 0;
-        draw();
+        // היו טעויות – מאפסים את הניסיון (אותה משימה, לא עוברים הלאה)
+        resetAttempt(task);
       } else {
-        // לא היו טעויות בגלגול האחרון – המשימה הושלמה
+        // בלי טעויות – המשימה הושלמה
         completeCurrentTask();
       }
     }
@@ -546,7 +544,7 @@
 
     const pid = (pidInput.value || "").trim();
     if (tasks.length){
-      downloadCsv(pid); // אפשר למחוק אם לא רוצים הורדת CSV לנבדק
+      downloadCsv(pid);
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
