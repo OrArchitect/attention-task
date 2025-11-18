@@ -151,7 +151,7 @@
     margin: 30
   };
 
-  // ---- מזהי הטופס והשדות (entry.*) ----
+  // ---- טופס 2: טופס הסיכום (כבר קיים) ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
 
   const ENTRY_PID             = "entry.404955311";
@@ -159,10 +159,24 @@
   const ENTRY_POINTS_PER_TASK = "entry.742152065";   // PPT
   const ENTRY_ERRORS_PER_TASK = "entry.1634677467";  // EPT
   const ENTRY_DUR_PER_TASK    = "entry.529234118";   // DPT
-  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME
+  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME;
 
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
+
+  // ---- טופס 3: לוג המשימות (חדש) ----
+  const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
+  const LOG_FORM_BASE =
+    "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
+
+  // כאן אתה צריך להכניס את ה-entry.* המתאימים מטופס 3:
+  const LOG_ENTRY_PID        = "entry.PID_FIELD_ID";        // לדוגמה: "entry.123456789"
+  const LOG_ENTRY_TASK       = "entry.TASK_FIELD_ID";       // מספר משימה
+  const LOG_ENTRY_N_POINTS   = "entry.NPOINTS_FIELD_ID";    // כמות נקודות
+  const LOG_ENTRY_ERRORS     = "entry.ERRORS_FIELD_ID";     // כמות ניסיונות כושלים
+  const LOG_ENTRY_DURATION   = "entry.DURATION_FIELD_ID";   // זמן מילישניות
+  const LOG_ENTRY_COMPLETED  = "entry.COMPLETED_FIELD_ID";  // 1/0
+  const LOG_ENTRY_TIMESTAMP  = "entry.TIMESTAMP_FIELD_ID";  // ts
 
   // ======================= DOM =======================
   const canvas = document.getElementById("stage");
@@ -286,7 +300,7 @@
       points: generatePoints(n),
       selected: new Set(),
       selectionOrder: [],
-      errors: 0,        // כמות ניסיונות כושלים במשימה זו (רצף מלא לא נכון)
+      errors: 0,        // כמות ניסיונות כושלים במשימה זו
       startTime: now()
     };
     draw();
@@ -362,7 +376,7 @@
     const n = task.points.length;
     if (order.length !== n) return false;
     for (let i=0;i<n;i++){
-      if (order[i] !== i) return false;
+      if (order[i] !== i) return false; // ציפייה: 0,1,2,...,n-1
     }
     return true;
   }
@@ -416,20 +430,54 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
+  // ======================= שליחה לטופס 3 (לוג משימות) =======================
+  function sendTaskToLogForm(row){
+    // אם עוד לא הגדרת את ה-entry.* האמיתיים – פשוט יוצא מוקדם
+    if (
+      LOG_ENTRY_PID.includes("FIELD_ID") ||
+      LOG_ENTRY_TASK.includes("FIELD_ID")
+    ){
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set(LOG_ENTRY_PID,       row.pid);
+    params.set(LOG_ENTRY_TASK,      String(row.task));
+    params.set(LOG_ENTRY_N_POINTS,  String(row.n_points));
+    params.set(LOG_ENTRY_ERRORS,    String(row.errors));
+    params.set(LOG_ENTRY_DURATION,  String(row.duration_ms));
+    params.set(LOG_ENTRY_COMPLETED, String(row.completed));
+    params.set(LOG_ENTRY_TIMESTAMP, row.ts);
+
+    const url = LOG_FORM_BASE + params.toString();
+
+    if (navigator.sendBeacon){
+      navigator.sendBeacon(url);
+    } else {
+      // fallback שקט
+      fetch(url, { method:"GET", mode:"no-cors" }).catch(()=>{});
+    }
+  }
+
   // ======================= לוג משימות וסשן =======================
   function logTask(completed){
     if (!currentTask) return;
     const endTime = now();
     const dur = Math.round(endTime - currentTask.startTime);
+    const pid = (pidInput.value || "").trim();
 
-    tasks.push({
+    const row = {
+      pid,
       task: currentTask.index,
       n_points: currentTask.points.length,
       errors: currentTask.errors,
       duration_ms: dur,
       completed: completed ? 1 : 0,
       ts: new Date().toISOString()
-    });
+    };
+
+    tasks.push(row);
+    sendTaskToLogForm(row);
   }
 
   function completeCurrentTask(){
@@ -464,9 +512,8 @@
   function buildCsv(){
     if (!tasks.length) return "";
     const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
-    const pid = (pidInput.value || "").trim();
     const rows = tasks.map(t =>
-      [pid, t.task, t.n_points, t.errors, t.duration_ms, t.completed, t.ts].join(",")
+      [t.pid, t.task, t.n_points, t.errors, t.duration_ms, t.completed, t.ts].join(",")
     );
     return head.join(",") + "\n" + rows.join("\n");
   }
