@@ -184,7 +184,7 @@
   let tasks = [];
   let taskCounter = 0;
   let currentTask = null;
-  let pendingNextTaskPoints = null; // כשסיימו משימה ומחכים ללחיצה על "משימה הבאה"
+  let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
   // ======================= פונקציות עזר =======================
@@ -258,7 +258,7 @@
       }
       if (!ok) continue;
 
-      // לא להיות קרוב מדי לקו קיים ברצף
+      // לא להיות קרוב מדי לקו קיים
       for (let i = 1; i < pts.length; i++){
         const d = pointToSegmentDistance(candidate, pts[i-1], pts[i]);
         if (d < CONFIG.lineAvoidDistance){
@@ -288,8 +288,10 @@
       index: ++taskCounter,
       points: generatePoints(n),
       selected: new Set(),
+      selectionOrder: [],      // סדר הבחירה (לקווים)
       highestCorrect: 0,
-      errors: 0,
+      errors: 0,               // סך כל הטעויות במשימה
+      errorsSinceReset: 0,     // טעויות בגלגול הנוכחי של אותה משימה
       startTime: now()
     };
     draw();
@@ -301,7 +303,23 @@
     if (!currentTask) return;
 
     const pts = currentTask.points;
+    const order = currentTask.selectionOrder;
 
+    // קודם כל – הקווים לפי סדר הבחירה
+    if (order.length > 1){
+      ctx.strokeStyle = "#e5e7eb";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      const first = pts[order[0]];
+      ctx.moveTo(first.x, first.y);
+      for (let i=1;i<order.length;i++){
+        const p = pts[order[i]];
+        ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    // אחר כך – העיגולים והמספרים
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "14px system-ui, Arial";
@@ -360,14 +378,16 @@
     const selected = task.selected;
 
     if (selected.has(idx)){
-      // ביטול בחירה
+      // ביטול בחירה – גם מהסט וגם מסדר הבחירה
       selected.delete(idx);
+      task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
       draw();
       return;
     }
 
     // בחירה חדשה
     selected.add(idx);
+    task.selectionOrder.push(idx);
     draw();
 
     // מדידת נכונות/טעויות – פנימי בלבד
@@ -376,11 +396,22 @@
       task.highestCorrect++;
     } else {
       task.errors++;
+      task.errorsSinceReset++;
     }
 
-    // אם הרצף 1..N הושלם
+    // אם הרצף 1..N נבחר (גם אם היו טעויות בדרך)
     if (task.highestCorrect >= task.points.length){
-      completeCurrentTask();
+      if (task.errorsSinceReset > 0){
+        // היו טעויות – המשימה לא עוברת, חוזרים על אותה משימה בשקט
+        task.selected.clear();
+        task.selectionOrder = [];
+        task.highestCorrect = 0;
+        task.errorsSinceReset = 0;
+        draw();
+      } else {
+        // לא היו טעויות בגלגול האחרון – המשימה הושלמה
+        completeCurrentTask();
+      }
     }
   }
 
@@ -406,13 +437,11 @@
   function completeCurrentTask(){
     logTask(true);
 
-    // קובעים כמה נקודות יהיו במשימה הבאה
     const nextN = currentTask.points.length + CONFIG.incrementBy;
     pendingNextTaskPoints = nextN;
     currentTask = null;
-    draw(); // ינקה את המסך
+    draw();
 
-    // מציגים overlay: "סיימת משימה"
     overlayTitle.textContent = "סיימת משימה";
     overlayText.textContent = "לחץ/י על \"משימה הבאה\" כדי להמשיך.";
     overlayContinue.textContent = "משימה הבאה";
