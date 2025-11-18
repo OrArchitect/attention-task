@@ -144,10 +144,10 @@
   // ======================= הגדרות כלליות =======================
   const CONFIG = {
     sessionMinutes: 10,   // משך סשן בדקות
-    initialPoints: 14,    // כמות נקודות התחלתית
-    incrementBy: 3,       // העלאת קושי
-    minDistance: 20,      // מרחק מינימלי בין נקודות
-    lineAvoidDistance: 8,// מרחק מנקודה לקו – להימנע מנקודות על קווים
+    initialPoints: 12,    // כמות נקודות התחלתית
+    incrementBy: 3,       // העלאת קושי בכל משימה
+    minDistance: 30,      // מרחק מינימלי בין נקודות
+    lineAvoidDistance: 16,// מרחק מנקודה לקו – להימנע מנקודות על קווים
     margin: 30
   };
 
@@ -235,35 +235,35 @@
   function generatePoints(n){
     const rect = canvas.getBoundingClientRect();
     const m = CONFIG.margin;
-    const W = Math.max(rect.width - 2*m, 100);
-    const H = Math.max(rect.height - 2*m, 100);
+    const W = Math.max(rect.width - 2*m, 220);
+    const H = Math.max(rect.height - 2*m, 220);
 
     const pts = [];
     let attempts = 0;
-    const maxAttempts = 5000;
+    const maxAttempts = 4000;
 
-    // נקודה ראשונה
-    pts.push({
-      x: randomBetween(m, m+W),
-      y: randomBetween(m, m+H)
-    });
-
-    while(pts.length < n && attempts < maxAttempts){
+    // ננסה קודם עם תנאים "יפים" (מרחק מינימלי, לא על קו)
+    while (pts.length < n && attempts < maxAttempts){
       attempts++;
       const candidate = {
         x: randomBetween(m, m+W),
         y: randomBetween(m, m+H)
       };
 
-      // מרחק מינימלי משאר הנקודות
-      let ok = pts.every(p => distance(p, candidate) >= CONFIG.minDistance);
+      let ok = true;
+
+      // מרחק מנקודות קיימות
+      for (const p of pts){
+        if (distance(p, candidate) < CONFIG.minDistance){
+          ok = false;
+          break;
+        }
+      }
       if (!ok) continue;
 
-      // בדיקה מול הקו האחרון – לא לשים נקודה על קו קיים
-      const last = pts[pts.length-1];
-      for(let i=0;i<pts.length;i++){
-        const p = pts[i];
-        const d = pointToSegmentDistance(p, last, candidate);
+      // לא להיות קרוב מדי לקו קיים ברצף
+      for (let i = 1; i < pts.length; i++){
+        const d = pointToSegmentDistance(candidate, pts[i-1], pts[i]);
         if (d < CONFIG.lineAvoidDistance){
           ok = false;
           break;
@@ -272,6 +272,15 @@
       if (!ok) continue;
 
       pts.push(candidate);
+    }
+
+    // אם אחרי כל הניסיונות אין מספיק נקודות – נוסיף נקודות חופשיות בלי תנאים,
+    // רק בתוך גבולות המסך, כדי להבטיח שתמיד יהיו n נקודות.
+    while (pts.length < n){
+      pts.push({
+        x: randomBetween(m, m+W),
+        y: randomBetween(m, m+H)
+      });
     }
 
     return pts;
@@ -551,4 +560,3 @@
 </script>
 </body>
 </html>
-
