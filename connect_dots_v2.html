@@ -136,7 +136,7 @@
   </div>
 
   <footer>
-    יש ללחוץ על המספרים לפי סדר עולה. לחיצה על מספר תדגיש אותו; לחיצה נוספת עליו תאפס את הניסיון הנוכחי.
+    יש ללחוץ על המספרים לפי סדר עולה. ניתן להסיר בחירה על ידי לחיצה חוזרת על אותו מספר.
   </footer>
 
 <script>
@@ -286,9 +286,7 @@
       points: generatePoints(n),
       selected: new Set(),
       selectionOrder: [],
-      highestCorrect: 0,
-      errors: 0,
-      errorsSinceReset: 0,
+      errors: 0,        // כמות ניסיונות כושלים במשימה זו (רצף מלא לא נכון)
       startTime: now()
     };
     draw();
@@ -359,11 +357,19 @@
     return -1;
   }
 
+  function isPerfectSequence(task){
+    const order = task.selectionOrder;
+    const n = task.points.length;
+    if (order.length !== n) return false;
+    for (let i=0;i<n;i++){
+      if (order[i] !== i) return false;
+    }
+    return true;
+  }
+
   function resetAttempt(task){
     task.selected.clear();
     task.selectionOrder = [];
-    task.highestCorrect = 0;
-    task.errorsSinceReset = 0;
     draw();
   }
 
@@ -383,8 +389,10 @@
     const selected = task.selected;
 
     if (selected.has(idx)){
-      // במקום להסיר רק נקודה – מאפסים את כל הניסיון הנוכחי
-      resetAttempt(task);
+      // הסרת בחירה – מסירים גם מהסדר
+      selected.delete(idx);
+      task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
+      draw();
       return;
     }
 
@@ -393,22 +401,14 @@
     task.selectionOrder.push(idx);
     draw();
 
-    const expectedIndex = task.highestCorrect;
-    if (idx === expectedIndex){
-      task.highestCorrect++;
-    } else {
-      task.errors++;
-      task.errorsSinceReset++;
-    }
-
-    // הרצף 1..N הושלם
-    if (task.highestCorrect >= task.points.length){
-      if (task.errorsSinceReset > 0){
-        // היו טעויות – מאפסים את הניסיון (אותה משימה, לא עוברים הלאה)
-        resetAttempt(task);
-      } else {
-        // בלי טעויות – המשימה הושלמה
+    // אם נבחרו *כל* המספרים – בודקים האם הסדר מושלם
+    if (task.selectionOrder.length === task.points.length){
+      if (isPerfectSequence(task)){
         completeCurrentTask();
+      } else {
+        // ניסיון כושל: העלאת מונה הטעויות ואיפוס המשימה
+        task.errors += 1;
+        resetAttempt(task);
       }
     }
   }
