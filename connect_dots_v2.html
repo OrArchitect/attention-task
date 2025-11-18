@@ -130,7 +130,7 @@
       <div class="box">
         <h2 id="overlayTitle">סיום הסשן</h2>
         <p id="overlayText" class="muted"></p>
-        <button id="overlayContinue">המשך לשאלון</button>
+        <button id="overlayContinue">המשך</button>
       </div>
     </div>
   </div>
@@ -154,15 +154,12 @@
   // ---- מזהי הטופס והשדות (entry.*) ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
 
-  // PID – מהשדה הקיים
   const ENTRY_PID             = "entry.404955311";
-
-  // שדות אוטומטיים לטופס 2 (מהקישור ששלחת):
-  const ENTRY_TOTAL_TASKS      = "entry.1331557537";  // Total tasks completed (auto) = TTC
-  const ENTRY_POINTS_PER_TASK  = "entry.742152065";   // Points per task (auto)       = PPT
-  const ENTRY_ERRORS_PER_TASK  = "entry.1634677467";  // Errors per task (auto)       = EPT
-  const ENTRY_DUR_PER_TASK     = "entry.529234118";   // Duration per task ms (auto)  = DPT
-  const ENTRY_EXPERIMENT_TIME  = "entry.883845532";   // Experiment time (auto)       = TIME
+  const ENTRY_TOTAL_TASKS     = "entry.1331557537";  // TTC
+  const ENTRY_POINTS_PER_TASK = "entry.742152065";   // PPT
+  const ENTRY_ERRORS_PER_TASK = "entry.1634677467";  // EPT
+  const ENTRY_DUR_PER_TASK    = "entry.529234118";   // DPT
+  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME
 
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
@@ -181,13 +178,14 @@
   // ======================= STATE =======================
   let running = false;
   let sessionStart = null;
-  let experimentStartIso = null; // זמן תחילת הניסוי (לשליחה לטופס)
+  let experimentStartIso = null;
   let tickId = null;
 
   let tasks = [];
   let taskCounter = 0;
   let currentTask = null;
-  // currentTask: {index, points[], selected:Set, highestCorrect, errors, startTime}
+  let pendingNextTaskPoints = null; // כשסיימו משימה ומחכים ללחיצה על "משימה הבאה"
+  let sessionEnded = false;
 
   // ======================= פונקציות עזר =======================
   function getPidFromUrl(){
@@ -242,7 +240,6 @@
     let attempts = 0;
     const maxAttempts = 4000;
 
-    // ננסה קודם עם תנאים "יפים" (מרחק מינימלי, לא על קו)
     while (pts.length < n && attempts < maxAttempts){
       attempts++;
       const candidate = {
@@ -274,8 +271,7 @@
       pts.push(candidate);
     }
 
-    // אם אחרי כל הניסיונות אין מספיק נקודות – נוסיף נקודות חופשיות בלי תנאים,
-    // רק בתוך גבולות המסך, כדי להבטיח שתמיד יהיו n נקודות.
+    // אם אין מספיק נקודות – נשלים בלי תנאים
     while (pts.length < n){
       pts.push({
         x: randomBetween(m, m+W),
@@ -287,12 +283,12 @@
   }
 
   function openNewTask(n){
-    const pts = generatePoints(n);
+    pendingNextTaskPoints = null;
     currentTask = {
       index: ++taskCounter,
-      points: pts,
+      points: generatePoints(n),
       selected: new Set(),
-      highestCorrect: 0,  // כמה מספרים ראשונים (1,2,3...) כבר נמצא בסדר נכון
+      highestCorrect: 0,
       errors: 0,
       startTime: now()
     };
@@ -315,7 +311,6 @@
       const radius = 13;
 
       if (isSelected){
-        // נקודה שנבחרה – מודגשת, בלי אינדיקציה לנכונות
         ctx.fillStyle = "#e5e7eb";
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
@@ -324,7 +319,6 @@
         ctx.fillStyle = "#020617";
         ctx.fillText(String(idx+1), p.x, p.y);
       } else {
-        // נקודה לא נבחרה
         ctx.fillStyle = "#020617";
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
@@ -351,7 +345,8 @@
   }
 
   function handlePointerDown(ev){
-    if (!running || !currentTask) return;
+    if (!running || !currentTask || pendingNextTaskPoints !== null) return;
+
     const rect = canvas.getBoundingClientRect();
     const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
     const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
@@ -376,14 +371,14 @@
     draw();
 
     // מדידת נכונות/טעויות – פנימי בלבד
-    const expectedIndex = task.highestCorrect; // כמה מספרים ראשונים כבר נמצאו
+    const expectedIndex = task.highestCorrect;
     if (idx === expectedIndex){
       task.highestCorrect++;
     } else {
       task.errors++;
     }
 
-    // אם הרצף 1..N נמצא לפחות פעם אחת
+    // אם הרצף 1..N הושלם
     if (task.highestCorrect >= task.points.length){
       completeCurrentTask();
     }
@@ -410,8 +405,25 @@
 
   function completeCurrentTask(){
     logTask(true);
+
+    // קובעים כמה נקודות יהיו במשימה הבאה
     const nextN = currentTask.points.length + CONFIG.incrementBy;
-    openNewTask(nextN);
+    pendingNextTaskPoints = nextN;
+    currentTask = null;
+    draw(); // ינקה את המסך
+
+    // מציגים overlay: "סיימת משימה"
+    overlayTitle.textContent = "סיימת משימה";
+    overlayText.textContent = "לחץ/י על \"משימה הבאה\" כדי להמשיך.";
+    overlayContinue.textContent = "משימה הבאה";
+    overlay.style.display = "grid";
+
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+      if (running && pendingNextTaskPoints !== null){
+        openNewTask(pendingNextTaskPoints);
+      }
+    };
   }
 
   function tick(){
@@ -450,7 +462,6 @@
 
   // ======== בניית המידע שנשלח לטופס 2 ========
   function buildFormSummary(){
-    // רק משימות שהושלמו באמת (completed === 1)
     const completedTasks = tasks.filter(t => t.completed === 1);
     const totalTasksCompleted = completedTasks.length;
 
@@ -490,30 +501,32 @@
   }
 
   function endSession(autoEnded){
-    if (!running){
+    if (sessionEnded) {
       redirectToForm();
       return;
     }
+    sessionEnded = true;
     running = false;
     if (tickId) clearInterval(tickId);
     startBtn.disabled = false;
     endBtn.disabled = true;
 
     if (currentTask){
-      // המשימה האחרונה ככל הנראה לא הושלמה – נרשום כלא-מושלמת
       logTask(false);
     }
 
     const pid = (pidInput.value || "").trim();
     if (tasks.length){
-      downloadCsv(pid); // אם לא רוצים להוריד CSV לנבדק – אפשר למחוק שורה זו
+      downloadCsv(pid); // אפשר למחוק אם לא רוצים הורדת CSV לנבדק
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
     overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
+    overlayContinue.textContent = "המשך לשאלון";
     overlay.style.display = "grid";
 
     overlayContinue.onclick = () => {
+      overlay.style.display = "none";
       redirectToForm();
     };
   }
@@ -525,11 +538,13 @@
       return;
     }
     running = true;
+    sessionEnded = false;
     sessionStart = now();
-    experimentStartIso = new Date().toISOString(); // זמן תחילת הניסוי
+    experimentStartIso = new Date().toISOString();
     tasks = [];
     taskCounter = 0;
     currentTask = null;
+    pendingNextTaskPoints = null;
     overlay.style.display = "none";
     startBtn.disabled = true;
     endBtn.disabled = false;
