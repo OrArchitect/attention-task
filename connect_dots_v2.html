@@ -3,16 +3,15 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ניסוי חיבור נקודות — גרסה מותאמת</title>
+  <title>משימת חיבור נקודות – ניסוי קשב</title>
   <style>
     :root{
       --bg:#020617;
       --panel:#0b1120;
       --ink:#e5e7eb;
       --muted:#94a3b8;
-      --accent:#60a5fa;
-      --accent-soft:rgba(96,165,250,0.4);
-      --wrong:#f97373;
+      --accent:#e5e7eb;
+      --stroke:#64748b;
     }
     html,body{height:100%;}
     body{
@@ -57,9 +56,7 @@
       border-radius:8px;
       min-width:120px;
     }
-    input[readonly]{
-      opacity:0.8;
-    }
+    input[readonly]{opacity:0.8;}
     button{
       border-radius:999px;
       border:1px solid #334155;
@@ -74,7 +71,7 @@
       cursor:not-allowed;
     }
     button:hover:not(:disabled){
-      border-color:var(--accent);
+      border-color:#60a5fa;
     }
     #stageWrap{
       padding:10px 16px 16px;
@@ -87,6 +84,7 @@
       background:#020617;
       border-radius:18px;
       border:1px solid #1f2937;
+      touch-action:none;
     }
     #overlay{
       position:absolute;
@@ -109,7 +107,6 @@
       margin-bottom:8px;
     }
     .muted{color:var(--muted);}
-    .hidden{display:none !important;}
   </style>
 </head>
 <body>
@@ -131,33 +128,34 @@
     <canvas id="stage"></canvas>
     <div id="overlay">
       <div class="box">
-        <h2 id="overlayTitle">סיום סשן</h2>
+        <h2 id="overlayTitle">סיום הסשן</h2>
         <p id="overlayText" class="muted"></p>
-        <button id="overlayContinue">המשך</button>
+        <button id="overlayContinue">המשך לשאלון</button>
       </div>
     </div>
   </div>
 
   <footer>
-    הקווים נחברים תמיד לפי סדר מספרים עולה. ניתן לבטל בחירה שגויה בלחיצה נוספת על אותה ספרה.
+    יש ללחוץ על המספרים לפי סדר עולה. לחיצה על מספר תדגיש אותו; לחיצה נוספת עליו תחזיר אותו למצב רגיל.
   </footer>
 
 <script>
 (() => {
+  // ======================= הגדרות כלליות =======================
   const CONFIG = {
-    sessionMinutes: 10,       // משך סשן בדקות
-    initialPoints: 20,        // כמות נקודות התחלתית
-    incrementBy: 5,           // כמה נקודות להוסיף בכל משימה שהושלמה
-    minDistance: 70,          // מרחק מינימלי בין נקודות
-    lineAvoidDistance: 24,    // מרחק מינימלי של נקודה מקטע קו
-    margin: 40
+    sessionMinutes: 10,   // משך סשן בדקות
+    initialPoints: 14,    // כמות נקודות התחלתית
+    incrementBy: 3,       // העלאת קושי
+    minDistance: 40,      // מרחק מינימלי בין נקודות
+    lineAvoidDistance: 16,// מרחק מנקודה לקו – כדי להימנע מנקודות על קווים
+    margin: 30
   };
 
-  // טופס 2 – עם השדה של ה-PID
+  // כתובת טופס 2 (שדה PID = entry.404955311)
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA/viewform?usp=pp_url&entry.404955311=";
 
-  // DOM
+  // ======================= DOM =======================
   const canvas = document.getElementById("stage");
   const ctx = canvas.getContext("2d");
   const pidInput = document.getElementById("pid");
@@ -168,19 +166,24 @@
   const overlayText = document.getElementById("overlayText");
   const overlayContinue = document.getElementById("overlayContinue");
 
-  // State
+  // ======================= STATE =======================
   let running = false;
   let sessionStart = null;
   let tickId = null;
+
   let tasks = [];
-  let taskIndex = 0;
-  let currentTask = null; // {points, correctSeq, wrongSet, errors, startTime, endTime}
+  let taskCounter = 0;
+  let currentTask = null;
+  // currentTask: {index, points[], selected:Set, highestCorrect, errors, startTime}
 
-  // --- Helpers ---
-
+  // ======================= פונקציות עזר =======================
   function getPidFromUrl(){
     const params = new URLSearchParams(window.location.search);
     return params.get("pid") || "";
+  }
+
+  function now(){
+    return performance.now();
   }
 
   function resizeCanvas(){
@@ -192,10 +195,6 @@
     draw();
   }
 
-  function now(){
-    return performance.now();
-  }
-
   function randomBetween(min,max){
     return min + Math.random() * (max - min);
   }
@@ -205,7 +204,6 @@
   }
 
   function pointToSegmentDistance(p,a,b){
-    // מרחק מנקודה p למקטע a-b
     const vx = b.x - a.x;
     const vy = b.y - a.y;
     const wx = p.x - a.x;
@@ -220,38 +218,38 @@
     return Math.hypot(p.x-projX, p.y-projY);
   }
 
-  // --- Task generation ---
-
-  function generateTask(n){
+  // ======================= יצירת משימה =======================
+  function generatePoints(n){
     const rect = canvas.getBoundingClientRect();
     const m = CONFIG.margin;
     const W = Math.max(rect.width - 2*m, 100);
     const H = Math.max(rect.height - 2*m, 100);
 
-    const points = [];
+    const pts = [];
     let attempts = 0;
+    const maxAttempts = 5000;
 
     // נקודה ראשונה
-    points.push({
+    pts.push({
       x: randomBetween(m, m+W),
       y: randomBetween(m, m+H)
     });
 
-    while(points.length < n && attempts < 5000){
+    while(pts.length < n && attempts < maxAttempts){
       attempts++;
       const candidate = {
         x: randomBetween(m, m+W),
         y: randomBetween(m, m+H)
       };
 
-      // מרחק מנקודות קיימות
-      let ok = points.every(p => distance(p, candidate) >= CONFIG.minDistance);
+      // מרחק מינימלי משאר הנקודות
+      let ok = pts.every(p => distance(p, candidate) >= CONFIG.minDistance);
       if (!ok) continue;
 
-      // לוודא שאין נקודה אחרת שיושבת כמעט על הקו בין הנקודה האחרונה למועמדת
-      const last = points[points.length-1];
-      for(let i=0;i<points.length;i++){
-        const p = points[i];
+      // בדיקה מול הקו האחרון – לא לשים נקודה על קו קיים
+      const last = pts[pts.length-1];
+      for(let i=0;i<pts.length;i++){
+        const p = pts[i];
         const d = pointToSegmentDistance(p, last, candidate);
         if (d < CONFIG.lineAvoidDistance){
           ok = false;
@@ -260,75 +258,51 @@
       }
       if (!ok) continue;
 
-      points.push(candidate);
+      pts.push(candidate);
     }
 
-    return {
-      index: ++taskIndex,
-      points,
-      correctSeq: [],
-      wrongSet: new Set(),
-      errors: 0,
-      startTime: now(),
-      endTime: null
-    };
+    return pts;
   }
 
-  // --- Drawing ---
+  function openNewTask(n){
+    const pts = generatePoints(n);
+    currentTask = {
+      index: ++taskCounter,
+      points: pts,
+      selected: new Set(),
+      highestCorrect: 0,  // כמה מספרים ראשונים (1,2,3...) כבר נמצא בסדר נכון
+      errors: 0,
+      startTime: now()
+    };
+    draw();
+  }
 
+  // ======================= ציור =======================
   function draw(){
     ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
     if (!currentTask) return;
 
     const pts = currentTask.points;
 
-    // קווים בין נקודות שנבחרו בסדר הנכון
-    if (currentTask.correctSeq.length > 1){
-      ctx.beginPath();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = "rgba(96,165,250,0.9)";
-      for(let i=1;i<currentTask.correctSeq.length;i++){
-        const a = pts[currentTask.correctSeq[i-1]];
-        const b = pts[currentTask.correctSeq[i]];
-        ctx.moveTo(a.x, a.y);
-        ctx.lineTo(b.x, b.y);
-      }
-      ctx.stroke();
-    }
-
-    // ציור נקודות
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "14px system-ui, Arial";
 
     pts.forEach((p, idx) => {
-      const isCorrect = currentTask.correctSeq.includes(idx);
-      const isWrong = currentTask.wrongSet.has(idx);
+      const isSelected = currentTask.selected.has(idx);
       const radius = 13;
 
-      if (isCorrect){
-        // נבחר נכון – כחול מלא
-        ctx.fillStyle = "#1d4ed8";
+      if (isSelected){
+        // נקודה שנבחרה – מודגשת, אבל בלי קשר אם נכונה או לא
+        ctx.fillStyle = "#e5e7eb";
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
         ctx.fill();
 
-        ctx.fillStyle = "#e5e7eb";
-        ctx.fillText(String(idx+1), p.x, p.y);
-      } else if (isWrong){
-        // בחירה שגויה – עיגול דהוי עם קו אדום
-        ctx.fillStyle = "rgba(148,163,184,0.4)";
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
-        ctx.fill();
-        ctx.strokeStyle = "#f97373";
-        ctx.lineWidth = 2;
-        ctx.stroke();
-
-        ctx.fillStyle = "#e5e7eb";
+        ctx.fillStyle = "#020617";
         ctx.fillText(String(idx+1), p.x, p.y);
       } else {
-        // נקודה עדיין לא נבחרה
+        // נקודה לא נבחרה
         ctx.fillStyle = "#020617";
         ctx.beginPath();
         ctx.arc(p.x, p.y, radius, 0, Math.PI*2);
@@ -343,8 +317,7 @@
     });
   }
 
-  // --- Interaction ---
-
+  // ======================= אינטראקציה =======================
   function hitTest(x,y){
     if (!currentTask) return -1;
     const pts = currentTask.points;
@@ -367,92 +340,74 @@
     if (idx === -1) return;
 
     const task = currentTask;
-    const nextExpected = task.correctSeq.length; // האינדקס הבא (0-מבוסס)
+    const selected = task.selected;
 
-    if (idx === nextExpected){
-      // בחירה נכונה – מספר הבא ברצף
-      task.correctSeq.push(idx);
-      task.wrongSet.delete(idx);
+    if (selected.has(idx)){
+      // ביטול בחירה – בלי להחזיר "נקודות" או לתקן טעויות
+      selected.delete(idx);
       draw();
+      return;
+    }
 
-      if (task.correctSeq.length === task.points.length){
-        finishCurrentTask(true);
-      }
+    // בחירה חדשה
+    selected.add(idx);
+    draw();
+
+    // מדידת טעויות בתוך המערכת (בלי להראות לנבדק)
+    const expectedIndex = task.highestCorrect; // כמה מספרים ראשונים כבר נמצאו
+    if (idx === expectedIndex){
+      task.highestCorrect++;
     } else {
-      // בחירה שגויה – טוגל
-      if (task.wrongSet.has(idx)){
-        task.wrongSet.delete(idx);      // ביטול בחירה
-      } else {
-        task.wrongSet.add(idx);         // סימון שגוי
-        task.errors += 1;               // נספר לצורכי ניתוח
-      }
-      draw();
+      task.errors++;
+    }
+
+    // אם מצא את כל המספרים לפי סדר נכון לפחות פעם אחת
+    if (task.highestCorrect >= task.points.length){
+      completeCurrentTask();
     }
   }
 
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
-  // --- Tasks / Session control ---
-
-  function startSession(){
-    const pid = (pidInput.value || "").trim();
-    if (!pid){
-      alert("נא למלא מזהה נבדק לפני תחילת הסשן.");
-      return;
-    }
-    running = true;
-    tasks = [];
-    taskIndex = 0;
-    sessionStart = now();
-    startBtn.disabled = true;
-    endBtn.disabled = false;
-    overlay.style.display = "none";
-    currentTask = generateTask(CONFIG.initialPoints);
-    draw();
-    if (tickId) clearInterval(tickId);
-    tickId = setInterval(tick, 500);
-  }
-
-  function finishCurrentTask(completed){
+  // ======================= לוג משימות וסשן =======================
+  function logTask(completed){
     if (!currentTask) return;
-    currentTask.endTime = now();
-    const dur = currentTask.endTime - currentTask.startTime;
+    const endTime = now();
+    const dur = Math.round(endTime - currentTask.startTime);
+
     tasks.push({
       task: currentTask.index,
       n_points: currentTask.points.length,
       errors: currentTask.errors,
-      duration_ms: Math.round(dur),
+      duration_ms: dur,
       completed: completed ? 1 : 0,
       ts: new Date().toISOString()
     });
+  }
 
-    if (!running) return;
-
-    if (completed){
-      // העלאת רמת קושי
-      const nextPoints = currentTask.points.length + CONFIG.incrementBy;
-      currentTask = generateTask(nextPoints);
-    } else {
-      // ניסיון מחדש באותה רמת קושי
-      currentTask = generateTask(currentTask.points.length);
-    }
-    draw();
+  function completeCurrentTask(){
+    // המשימה הנוכחית הסתיימה בהצלחה
+    logTask(true);
+    const nextN = currentTask.points.length + CONFIG.incrementBy;
+    openNewTask(nextN);
   }
 
   function tick(){
     if (!running) return;
     const elapsedSec = (now() - sessionStart) / 1000;
     if (elapsedSec >= CONFIG.sessionMinutes * 60){
-      // סיום אוטומטי
       endSession(true);
     }
   }
 
   function buildCsv(){
     if (!tasks.length) return "";
-    const head = ["task","n_points","errors","duration_ms","completed","ts"];
-    const rows = tasks.map(t => head.map(h => t[h]).join(","));
+    const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
+    const pid = (pidInput.value || "").trim();
+    const rows = tasks.map(t =>
+      [pid, t.task, t.n_points, t.errors, t.duration_ms, t.completed, t.ts].join(",")
+    );
     return head.join(",") + "\n" + rows.join("\n");
   }
 
@@ -472,27 +427,31 @@
     }, 0);
   }
 
+  function redirectToForm(){
+    const pid = (pidInput.value || "").trim();
+    const target = FORM_BASE_URL + encodeURIComponent(pid || "");
+    window.location.href = target;
+  }
+
   function endSession(autoEnded){
     if (!running){
-      // אם כבר הופסק קודם – נוודא בכל זאת שממשיכים לטופס
+      // אם כבר הופסק קודם, פשוט ממשיכים לטופס
       redirectToForm();
       return;
     }
     running = false;
-    endBtn.disabled = true;
-    startBtn.disabled = false;
     if (tickId) clearInterval(tickId);
+    startBtn.disabled = false;
+    endBtn.disabled = true;
 
-    // לוג task אחרון כלא-מושלם אם עדיין רץ
+    // לוג של המשימה הנוכחית כלא מושלמת, אם יש
     if (currentTask){
-      finishCurrentTask(false);
+      logTask(false);
     }
 
     const pid = (pidInput.value || "").trim();
-
-    // הורדת CSV – תוכל לבקש מהנבדקים לשלוח לך את הקובץ אם תרצה
     if (tasks.length){
-      downloadCsv(pid);
+      downloadCsv(pid); // כרגע – הורדה ידנית
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
@@ -504,23 +463,32 @@
     };
   }
 
-  function redirectToForm(){
+  function startSession(){
     const pid = (pidInput.value || "").trim();
-    const target = FORM_BASE_URL + encodeURIComponent(pid || "");
-    window.location.href = target;
+    if (!pid){
+      alert("נא למלא מזהה נבדק לפני תחילת הסשן.");
+      return;
+    }
+    running = true;
+    sessionStart = now();
+    tasks = [];
+    taskCounter = 0;
+    currentTask = null;
+    overlay.style.display = "none";
+    startBtn.disabled = true;
+    endBtn.disabled = false;
+
+    openNewTask(CONFIG.initialPoints);
+
+    if (tickId) clearInterval(tickId);
+    tickId = setInterval(tick, 500);
   }
 
   function handleEndClick(){
-    if (!running){
-      redirectToForm();
-    } else {
-      endSession(false);
-    }
+    endSession(false);
   }
 
-  // --- Init ---
-
-  // PID מה-URL (מדף הביניים)
+  // ======================= Init =======================
   const urlPid = getPidFromUrl();
   if (urlPid){
     pidInput.value = urlPid;
