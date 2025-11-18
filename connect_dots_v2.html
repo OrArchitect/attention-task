@@ -151,17 +151,18 @@
     margin: 30
   };
 
-  // ---- כאן שמים את מזהי ה-entry מהטופס שלך ----
+  // ---- מזהי הטופס והשדות (entry.*) ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
 
-  // PID – כבר ידוע
-  const ENTRY_PID = "entry.404955311";
+  // PID – מהשדה הקיים
+  const ENTRY_PID             = "entry.404955311";
 
-  // את אלה תחליף לפי הקישור המלא שקיבלת:
-  const ENTRY_TOTAL_TASKS   = "entry.111111111"; // ← החלף ב-entry של Total tasks completed
-  const ENTRY_TOTAL_ERRORS  = "entry.222222222"; // ← החלף ב-entry של Total errors
-  const ENTRY_AVG_POINTS    = "entry.333333333"; // ← החלף ב-entry של Average points per task
-  const ENTRY_TOTAL_DURATION= "entry.444444444"; // ← החלף ב-entry של Total task duration ms
+  // שדות אוטומטיים לטופס 2 (מהקישור ששלחת):
+  const ENTRY_TOTAL_TASKS      = "entry.1331557537";  // Total tasks completed (auto) = TTC
+  const ENTRY_POINTS_PER_TASK  = "entry.742152065";   // Points per task (auto)       = PPT
+  const ENTRY_ERRORS_PER_TASK  = "entry.1634677467";  // Errors per task (auto)       = EPT
+  const ENTRY_DUR_PER_TASK     = "entry.529234118";   // Duration per task ms (auto)  = DPT
+  const ENTRY_EXPERIMENT_TIME  = "entry.883845532";   // Experiment time (auto)       = TIME
 
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
@@ -180,6 +181,7 @@
   // ======================= STATE =======================
   let running = false;
   let sessionStart = null;
+  let experimentStartIso = null; // זמן תחילת הניסוי (לשליחה לטופס)
   let tickId = null;
 
   let tasks = [];
@@ -437,44 +439,42 @@
     }, 0);
   }
 
-  function computeSummary(){
-    if (!tasks.length){
-      return {
-        totalTasks: 0,
-        totalErrors: 0,
-        avgPoints: 0,
-        totalDurationMs: 0
-      };
-    }
-    let totalTasks = tasks.length;
-    let totalErrors = 0;
-    let totalPoints = 0;
-    let totalDurationMs = 0;
+  // ======== בניית המידע שנשלח לטופס 2 ========
+  function buildFormSummary(){
+    // רק משימות שהושלמו באמת (completed === 1)
+    const completedTasks = tasks.filter(t => t.completed === 1);
+    const totalTasksCompleted = completedTasks.length;
 
-    tasks.forEach(t => {
-      totalErrors += t.errors;
-      totalPoints += t.n_points;
-      totalDurationMs += t.duration_ms;
-    });
+    let pointsPerTask = "";
+    let errorsPerTask = "";
+    let durPerTask = "";
+
+    if (completedTasks.length > 0){
+      pointsPerTask = completedTasks.map(t => t.n_points).join(",");
+      errorsPerTask = completedTasks.map(t => t.errors).join(",");
+      durPerTask = completedTasks.map(t => t.duration_ms).join(",");
+    }
 
     return {
-      totalTasks,
-      totalErrors,
-      avgPoints: totalPoints / totalTasks,
-      totalDurationMs
+      totalTasksCompleted,
+      pointsPerTask,
+      errorsPerTask,
+      durPerTask,
+      experimentTime: experimentStartIso || ""
     };
   }
 
   function redirectToForm(){
     const pid = (pidInput.value || "").trim();
-    const summary = computeSummary();
+    const summary = buildFormSummary();
 
     const params = new URLSearchParams();
     params.set(ENTRY_PID, pid || "");
-    params.set(ENTRY_TOTAL_TASKS, String(summary.totalTasks));
-    params.set(ENTRY_TOTAL_ERRORS, String(summary.totalErrors));
-    params.set(ENTRY_AVG_POINTS, String(summary.avgPoints.toFixed(2)));
-    params.set(ENTRY_TOTAL_DURATION, String(summary.totalDurationMs));
+    params.set(ENTRY_TOTAL_TASKS, String(summary.totalTasksCompleted));
+    params.set(ENTRY_POINTS_PER_TASK, summary.pointsPerTask);
+    params.set(ENTRY_ERRORS_PER_TASK, summary.errorsPerTask);
+    params.set(ENTRY_DUR_PER_TASK, summary.durPerTask);
+    params.set(ENTRY_EXPERIMENT_TIME, summary.experimentTime);
 
     const target = FORM_BASE_URL + params.toString();
     window.location.href = target;
@@ -491,12 +491,13 @@
     endBtn.disabled = true;
 
     if (currentTask){
+      // המשימה האחרונה ככל הנראה לא הושלמה – נרשום כלא-מושלמת
       logTask(false);
     }
 
     const pid = (pidInput.value || "").trim();
     if (tasks.length){
-      downloadCsv(pid); // אפשר למחוק אם לא רוצים הורדת CSV לנבדק
+      downloadCsv(pid); // אם לא רוצים להוריד CSV לנבדק – אפשר למחוק שורה זו
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
@@ -516,6 +517,7 @@
     }
     running = true;
     sessionStart = now();
+    experimentStartIso = new Date().toISOString(); // זמן תחילת הניסוי
     tasks = [];
     taskCounter = 0;
     currentTask = null;
