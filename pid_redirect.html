@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>מעבר למשימה – בדיקת קשב</title>
+<style>
+  body {
+    font-family: Arial, sans-serif;
+    background: #0b0f14;
+    color: #e5e7eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+  }
+  .box {
+    background: #111827;
+    border: 1px solid #1f2937;
+    padding: 24px;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 380px;
+    text-align: center;
+  }
+  .loading {
+    margin-top: 16px;
+    color: #94a3b8;
+    font-size: 0.9rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="box">
+  <h2>מעביר למשימה…</h2>
+  <p>נא להמתין מספר שניות.</p>
+  <div class="loading">טוען נתונים…</div>
+</div>
+
+<script>
+// קבלת PID מה-URL (למשל pid_redirect.html?pid=OR1234)
+const params = new URLSearchParams(window.location.search);
+const pid = params.get("pid");
+
+// אם אין PID — נציג הודעת שגיאה
+if (!pid) {
+  document.querySelector(".loading").innerHTML =
+    "<span style='color:#f87171'>שגיאה: לא התקבל קוד משתתף (PID).</span><br>אנא חזרו לטופס ונסו שוב, עם קישור הכולל ?pid=YOUR_CODE.";
+} else {
+  // כתובת המשימה שלך – קישור יחסי לאותו תיקייה:
+  const taskURL = "connect_dots_v2.html?pid=" + encodeURIComponent(pid);
+
+  // הפניה אוטומטית למשימה תוך שנייה
+  setTimeout(() => {
+    window.location.href = taskURL;
+  }, 1000);
+}
+</script>
+
+</body>
+</html>

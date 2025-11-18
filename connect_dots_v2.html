@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>ניסוי חיבור נקודות — V2</title>
+<style>
+  :root{--bg:#0b0f14;--panel:#111827;--ink:#e5e7eb;--muted:#94a3b8;--accent:#60a5fa}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;display:grid;grid-template-rows:auto 1fr auto}
+  header,footer{background:var(--panel);padding:10px 14px}
+  .top{display:flex;flex-direction:column;gap:8px;align-items:center}
+  .stats{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;font-variant-numeric:tabular-nums}
+  .controls{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;align-items:center}
+  .muted{color:var(--muted)}
+  input{background:#0f172a;border:1px solid #334155;color:var(--ink);padding:6px 8px;border-radius:8px}
+  button{background:#1f2937;color:var(--ink);border:1px solid #374151;border-radius:10px;padding:8px 12px;font-weight:700;cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button:disabled{opacity:.6;cursor:not-allowed}
+  #stageWrap{padding:10px 14px 14px;position:relative}
+  #stage{width:100%;height:68vh;background:#0e1522;border:1px solid #1f2937;border-radius:14px;display:block}
+  #overlay{position:absolute;inset:0;display:none;place-items:center;background:rgba(0,0,0,.4);border-radius:14px}
+  #overlay .box{background:#0b1220;border:1px solid #294057;padding:22px;border-radius:14px;text-align:center;min-width:260px}
+</style>
+</head>
+<body>
+<header>
+  <div class="top">
+    <div class="stats">
+      <div><span class="muted">זמן סשן:</span> <b id="sessionTimer">00:00</b> / <span id="sessionLimit">15:00</span></div>
+      <div><span class="muted">משימה:</span> <b id="taskNum">0</b></div>
+      <div><span class="muted">נקודות:</span> <b id="pointsNum">-</b></div>
+      <div><span class="muted">שגיאות (נוכחי):</span> <b id="errorsTask">0</b></div>
+      <div><span class="muted">הושלמו:</span> <b id="solvedTotal">0</b></div>
+    </div>
+    <div class="controls">
+      <label class="muted">מזהה נבדק:</label>
+      <input id="pid" type="text" placeholder="P001" />
+      <button id="startBtn">התחל סשן</button>
+      <button id="downloadBtn" disabled>הורד CSV</button>
+      <button id="endBtn">סיום מוקדם וחזרה לטופס</button>
+      <button id="resetBtn">איפוס</button>
+    </div>
+    <div class="muted" style="font-size:0.9rem;text-align:center;max-width:640px">
+      המשימה נועדה להימשך כ-15 דקות. נא לחבר את הנקודות לפי הסדר (1, 2, 3, ...).
+      בסיום הזמן או בלחיצה על "סיום מוקדם וחזרה לטופס" תועבר/י חזרה לשאלון ההמשך.
+    </div>
+  </div>
+</header>
+
+<div id="stageWrap">
+  <canvas id="stage"></canvas>
+  <div id="overlay"><div class="box">
+    <h3 id="overlayTitle">המשימה الحالية הושלמה בהצלחה</h3>
+    <p class="muted" style="margin-top:0;margin-bottom:12px">
+      לחצו על "הבא" כדי לעבור למשימה הבאה. ניתן להמשיך עד תום כ-15 דקות.
+    </p>
+    <button id="overlayNext">הבא</button>
+  </div></div>
+</div>
+
+<footer class="muted" style="text-align:center">
+  אנא ודא/י שסיימת את המשימה לפני חזרה לטופס. בסיום הסשן תופנה/י אוטומטית לחלק הבא בשאלון.
+</footer>
+
+<script>
+(() => {
+  // === Config ===
+  const CONFIG = {
+    initialPoints: 6,
+    incrementBy: 2,
+    minDistance: 48,
+    dotRadius: 12,
+    sessionMinutes: 15,   // ⏱ כעת 15 דקות
+    maxGenAttempts: 600
+  };
+
+  // === DOM helpers ===
+  const C = (id) => document.getElementById(id);
+  const canvas   = C('stage'),
+        ctx      = canvas.getContext('2d');
+  const startBtn = C('startBtn'),
+        endBtn   = C('endBtn'),
+        dlBtn    = C('downloadBtn'),
+        resetBtn = C('resetBtn');
+  const overlay     = C('overlay'),
+        overlayNext = C('overlayNext');
+  const tTimer  = C('sessionTimer'),
+        tLimit  = C('sessionLimit'),
+        tTask   = C('taskNum'),
+        tPts    = C('pointsNum'),
+        tErr    = C('errorsTask'),
+        tSolved = C('solvedTotal');
+  const pidInput = C('pid'); // reference to PID input
+
+  tLimit.textContent = fmt(CONFIG.sessionMinutes * 60);
+
+  // === קריאת PID מה-URL והכנסה לשדה ===
+  (function initPIDFromURL() {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const incomingPID = params.get('pid');
+      if (incomingPID && pidInput) {
+        pidInput.value = incomingPID;
+        pidInput.readOnly = true; // נועל כדי למנוע שינוי בטעות
+      }
+    } catch (e) {
+      console.warn('PID URL parse failed', e);
+    }
+  })();
+
+  // State
+  let running = false,
+      sessionStart = null,
+      tickId = null;
+  let task = null,
+      tasks = [],
+      taskNum = 0,
+      solved = 0,
+      nPoints = CONFIG.initialPoints;
+
+  // Helpers
+  function fmt(s) {
+    const m = Math.floor(s / 60),
+          x = Math.floor(s % 60);
+    return String(m).padStart(2, '0') + ':' + String(x).padStart(2, '0');
+  }
+  function now() { return performance.now(); }
+
+  function resize() {
+    const r = canvas.getBoundingClientRect(),
+          d = window.devicePixelRatio || 1;
+    canvas.width  = r.width * d;
+    canvas.height = r.height * d;
+    ctx.setTransform(d, 0, 0, d, 0, 0);
+    draw();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function genTask(n) {
+    const m = 40,
+          W = canvas.clientWidth  - m * 2,
+          H = canvas.clientHeight - m * 2,
+          pts = [];
+    let a = 0;
+    while (pts.length < n && a < CONFIG.maxGenAttempts) {
+      a++;
+      const x = m + Math.random() * W,
+            y = m + Math.random() * H;
+      if (pts.every(p => Math.hypot(p.x - x, p.y - y) >= CONFIG.minDistance))
+        pts.push({ x, y });
+    }
+    if (pts.length < n) {
+      CONFIG.minDistance = Math.max(24, CONFIG.minDistance * 0.85);
+      return genTask(n);
+    }
+    return {
+      points: pts,
+      clicks: [],
+      start: now(),
+      end: null,
+      errors: 0,
+      attempt: 1
+    };
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (!task) return;
+
+    // lines
+    ctx.lineWidth   = 3;
+    ctx.strokeStyle = 'rgba(96,165,250,.9)';
+    ctx.beginPath();
+    for (let i = 1; i < task.clicks.length; i++) {
+      const a = task.points[task.clicks[i - 1].idx],
+            b = task.points[task.clicks[i].idx];
+      if (a && b) {
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+      }
+    }
+    ctx.stroke();
+
+    // points
+    ctx.font         = '700 13px system-ui';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    task.points.forEach((p, i) => {
+      ctx.beginPath();
+      ctx.fillStyle   = '#1f2937';
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth   = 2;
+      ctx.arc(p.x, p.y, 12, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+      ctx.fillStyle = '#e5e7eb';
+      ctx.fillText(String(i + 1), p.x, p.y);
+    });
+  }
+
+  function hit(x, y) {
+    for (let i = 0; i < task.points.length; i++) {
+      const p = task.points[i];
+      if (Math.hypot(p.x - x, p.y - y) <= CONFIG.dotRadius) return i;
+    }
+    return -1;
+  }
+
+  function onDown(e) {
+    if (!running || !task) return;
+    const r = canvas.getBoundingClientRect();
+    const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left,
+          y = (e.touches ? e.touches[0].clientY : e.clientY) - r.top;
+    const idx = hit(x, y);
+    if (idx === -1) return;
+    task.clicks.push({ idx, time: now() });
+    draw();
+    if (task.clicks.length === task.points.length) {
+      task.end = now();
+      let err = 0;
+      for (let i = 0; i < task.points.length; i++) {
+        if (task.clicks[i].idx !== i) err++;
+      }
+      task.errors += err;
+      if (err > 0) {
+        // log failed attempt + reset same task
+        logRow(false, task.end - task.start, err);
+        task = {
+          points: task.points,
+          clicks: [],
+          start: now(),
+          end: null,
+          errors: 0,
+          attempt: (task.attempt || 1) + 1
+        };
+        tErr.textContent = '0';
+        draw();
+      } else {
+        tErr.textContent = String(task.errors);
+        overlay.style.display = 'grid'; // Next centered
+      }
+    }
+  }
+
+  function start() {
+    running      = true;
+    tasks        = [];
+    taskNum      = 0;
+    solved       = 0;
+    nPoints      = CONFIG.initialPoints;
+    sessionStart = now();
+    startBtn.disabled = true;
+    dlBtn.disabled    = false;
+    tick();
+    tickId = setInterval(tick, 250);
+    newTask();
+  }
+
+  // סיום סשן (עם אפשרות הפניה לטופס)
+  function end(shouldRedirect = true) {
+    running = false;
+    clearInterval(tickId);
+    startBtn.disabled = false;
+    overlay.style.display = 'none';
+
+    if (shouldRedirect) {
+      const pid = (pidInput && pidInput.value || '').trim();
+      if (pid) {
+        const baseFormUrl =
+          'https://docs.google.com/forms/d/e/1FAIpQLSebQby1C6ai2COShAr9lf2Dc25YemyGSV7EQ74tHnjZvneaSA/viewform?usp=pp_url&entry.1811890361=';
+        const target = baseFormUrl + encodeURIComponent(pid);
+        window.location.href = target;
+      }
+    }
+  }
+
+  function tick() {
+    const s = (now() - sessionStart) / 1000;
+    tTimer.textContent = fmt(s);
+    if (s >= CONFIG.sessionMinutes * 60) {
+      end(true); // זמן נגמר → מפנה לטופס
+    }
+  }
+
+  function newTask() {
+    task = genTask(nPoints);
+    taskNum++;
+    tTask.textContent = taskNum;
+    tPts.textContent  = nPoints;
+    tErr.textContent  = '0';
+    overlay.style.display = 'none';
+    draw();
+  }
+
+  function advance() { // רק אחרי הצלחה
+    logRow(true, task.end - task.start, task.errors);
+    solved++;
+    tSolved.textContent = solved;
+    nPoints += CONFIG.incrementBy;
+    newTask();
+  }
+
+  function logRow(completed, dur, err) {
+    tasks.push({
+      task: taskNum,
+      n_points: task.points.length,
+      attempt: task.attempt || 1,
+      errors: err,
+      duration_ms: Math.round(dur),
+      completed: completed ? 1 : 0,
+      ts: new Date().toISOString()
+    });
+  }
+
+  function csv() {
+    if (tasks.length === 0) return;
+    // כולל pid כעמודה ראשונה
+    const head = ['pid', 'task', 'n_points', 'attempt', 'errors', 'duration_ms', 'completed', 'ts'];
+    const pidValue = (pidInput && pidInput.value || '').trim();
+    const rows = tasks.map(t => [
+      pidValue,
+      t.task,
+      t.n_points,
+      t.attempt,
+      t.errors,
+      t.duration_ms,
+      t.completed,
+      t.ts
+    ].join(','));
+    const blob = new Blob([[head.join(',')].concat(rows).join('\n')], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'connect_the_dots_results.csv';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 0);
+  }
+
+  function reset() {
+    end(false); // איפוס בלי להפנות לטופס
+    tasks = [];
+    task  = null;
+    taskNum = 0;
+    solved  = 0;
+    tTimer.textContent  = '00:00';
+    tTask.textContent   = '0';
+    tPts.textContent    = '-';
+    tErr.textContent    = '0';
+    tSolved.textContent = '0';
+    draw();
+  }
+
+  // Events
+  canvas.addEventListener('pointerdown', onDown);
+  canvas.addEventListener('touchstart', onDown, { passive: true });
+  startBtn.addEventListener('click', start);
+  endBtn.addEventListener('click', () => end(true)); // סיום מוקדם → חזרה לטופס
+  overlayNext.addEventListener('click', advance);
+  dlBtn.addEventListener('click', csv);
+  resetBtn.addEventListener('click', reset);
+
+  // חשיפה גלובלית (לבדיקות ידניות בקונסול)
+  window.ctd = { start, end, csv, reset };
+
+})();
+</script>
+</body>
+</html>
