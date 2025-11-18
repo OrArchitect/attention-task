@@ -159,24 +159,31 @@
   const ENTRY_POINTS_PER_TASK = "entry.742152065";   // PPT
   const ENTRY_ERRORS_PER_TASK = "entry.1634677467";  // EPT
   const ENTRY_DUR_PER_TASK    = "entry.529234118";   // DPT
-  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME;
+  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME
 
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
 
-  // ---- טופס 3: לוג המשימות (חדש) ----
+  // ---- טופס 3: לוג המשימות (הקישור ששלחת) ----
   const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
   const LOG_FORM_BASE =
     "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
 
-  // כאן אתה צריך להכניס את ה-entry.* המתאימים מטופס 3:
-  const LOG_ENTRY_PID        = "entry.PID_FIELD_ID";        // לדוגמה: "entry.123456789"
-  const LOG_ENTRY_TASK       = "entry.TASK_FIELD_ID";       // מספר משימה
-  const LOG_ENTRY_N_POINTS   = "entry.NPOINTS_FIELD_ID";    // כמות נקודות
-  const LOG_ENTRY_ERRORS     = "entry.ERRORS_FIELD_ID";     // כמות ניסיונות כושלים
-  const LOG_ENTRY_DURATION   = "entry.DURATION_FIELD_ID";   // זמן מילישניות
-  const LOG_ENTRY_COMPLETED  = "entry.COMPLETED_FIELD_ID";  // 1/0
-  const LOG_ENTRY_TIMESTAMP  = "entry.TIMESTAMP_FIELD_ID";  // ts
+  // מזהי השדות מטופס 3 (לפי ה-prefill ששלחת):
+  // Test  → entry.152946855
+  // 1     → entry.781109584
+  // 12    → entry.347168050
+  // 0     → entry.1932703164
+  // 10000 → entry.1227866932
+  // 1     → entry.1100470565
+  // 2025-01-01T12:00:00Z → entry.1243807469
+  const LOG_ENTRY_PID        = "entry.152946855";
+  const LOG_ENTRY_TASK       = "entry.781109584";
+  const LOG_ENTRY_N_POINTS   = "entry.347168050";
+  const LOG_ENTRY_ERRORS     = "entry.1932703164";
+  const LOG_ENTRY_DURATION   = "entry.1227866932";
+  const LOG_ENTRY_COMPLETED  = "entry.1100470565";
+  const LOG_ENTRY_TIMESTAMP  = "entry.1243807469";
 
   // ======================= DOM =======================
   const canvas = document.getElementById("stage");
@@ -300,7 +307,7 @@
       points: generatePoints(n),
       selected: new Set(),
       selectionOrder: [],
-      errors: 0,        // כמות ניסיונות כושלים במשימה זו
+      errors: 0,        // כמות ניסיונות כושלים במשימה זו (רצף מלא לא נכון)
       startTime: now()
     };
     draw();
@@ -432,14 +439,6 @@
 
   // ======================= שליחה לטופס 3 (לוג משימות) =======================
   function sendTaskToLogForm(row){
-    // אם עוד לא הגדרת את ה-entry.* האמיתיים – פשוט יוצא מוקדם
-    if (
-      LOG_ENTRY_PID.includes("FIELD_ID") ||
-      LOG_ENTRY_TASK.includes("FIELD_ID")
-    ){
-      return;
-    }
-
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
     params.set(LOG_ENTRY_TASK,      String(row.task));
@@ -454,7 +453,6 @@
     if (navigator.sendBeacon){
       navigator.sendBeacon(url);
     } else {
-      // fallback שקט
       fetch(url, { method:"GET", mode:"no-cors" }).catch(()=>{});
     }
   }
