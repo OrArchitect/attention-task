@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>מעבר למשימה – בדיקת קשב</title>
+<title>מעביר למשימה – בדיקת קשב</title>
 <style>
   body {
     font-family: Arial, sans-serif;
-    background: #0b0f14;
+    background: #020617;
     color: #e5e7eb;
     display: flex;
     align-items: center;
@@ -16,47 +16,111 @@
     padding: 20px;
   }
   .box {
-    background: #111827;
+    background: #0b1120;
     border: 1px solid #1f2937;
     padding: 24px;
-    border-radius: 12px;
+    border-radius: 16px;
     width: 100%;
-    max-width: 380px;
+    max-width: 420px;
     text-align: center;
   }
-  .loading {
-    margin-top: 16px;
+  h2 {
+    margin-top: 0;
+    margin-bottom: 12px;
+  }
+  .muted {
     color: #94a3b8;
+    font-size: 0.9rem;
+  }
+  input {
+    width: 100%;
+    padding: 10px;
+    margin-top: 12px;
+    border-radius: 10px;
+    border: 1px solid #334155;
+    background: #020617;
+    color: #e5e7eb;
+    font-size: 1rem;
+  }
+  button {
+    margin-top: 16px;
+    padding: 10px 16px;
+    width: 100%;
+    background: #1f2937;
+    color: #e5e7eb;
+    border: 1px solid #374151;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: bold;
+  }
+  button:hover {
+    border-color: #60a5fa;
+  }
+  .error {
+    color: #f97373;
+    margin-top: 10px;
     font-size: 0.9rem;
   }
 </style>
 </head>
 <body>
 
-<div class="box">
+<div class="box" id="autoBox" style="display:none">
   <h2>מעביר למשימה…</h2>
-  <p>נא להמתין מספר שניות.</p>
-  <div class="loading">טוען נתונים…</div>
+  <p class="muted">נא להמתין מספר שניות.</p>
+</div>
+
+<div class="box" id="manualBox" style="display:none">
+  <h2>מעבר למשימה</h2>
+  <p class="muted">
+    נראה שלא התקבל קוד משתתף (PID) מהטופס.<br>
+    אנא הזן/י כאן את קוד המשתתף שבחרת (למשל OR1234), ולאחר מכן נמשיך למשימה.
+  </p>
+  <input id="pidInput" type="text" placeholder="הקלד/י כאן את קוד המשתתף">
+  <button id="goBtn">התחל את המשימה</button>
+  <div class="error" id="err" style="display:none">נא להזין קוד משתתף.</div>
 </div>
 
 <script>
-// קבלת PID מה-URL (למשל pid_redirect.html?pid=OR1234)
-const params = new URLSearchParams(window.location.search);
-const pid = params.get("pid");
+(function () {
+  const params = new URLSearchParams(window.location.search);
+  const urlPid = params.get("pid");
 
-// אם אין PID — נציג הודעת שגיאה
-if (!pid) {
-  document.querySelector(".loading").innerHTML =
-    "<span style='color:#f87171'>שגיאה: לא התקבל קוד משתתף (PID).</span><br>אנא חזרו לטופס ונסו שוב, עם קישור הכולל ?pid=YOUR_CODE.";
-} else {
-  // כתובת המשימה שלך – קישור יחסי לאותו תיקייה:
-  const taskURL = "connect_dots_v2.html?pid=" + encodeURIComponent(pid);
+  const autoBox   = document.getElementById("autoBox");
+  const manualBox = document.getElementById("manualBox");
+  const pidInput  = document.getElementById("pidInput");
+  const goBtn     = document.getElementById("goBtn");
+  const err       = document.getElementById("err");
 
-  // הפניה אוטומטית למשימה תוך שנייה
-  setTimeout(() => {
+  // פונקציית מעבר למשימה
+  function goToTask(pid) {
+    const trimmed = (pid || "").trim();
+    if (!trimmed) return;
+    const taskURL = "connect_dots_v2.html?pid=" + encodeURIComponent(trimmed);
     window.location.href = taskURL;
-  }, 1000);
-}
+  }
+
+  // אם הגיע PID ב-URL → מצב אוטומטי
+  if (urlPid) {
+    autoBox.style.display   = "block";
+    manualBox.style.display = "none";
+    setTimeout(() => goToTask(urlPid), 800);
+  } else {
+    // אין PID → מצב ידני
+    autoBox.style.display   = "none";
+    manualBox.style.display = "block";
+
+    goBtn.addEventListener("click", () => {
+      const v = pidInput.value.trim();
+      if (!v) {
+        err.style.display = "block";
+        return;
+      }
+      err.style.display = "none";
+      goToTask(v);
+    });
+  }
+})();
 </script>
 
 </body>
