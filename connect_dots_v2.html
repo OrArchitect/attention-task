@@ -164,12 +164,12 @@
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
 
-  // ---- טופס 3: לוג המשימות (הקישור ששלחת) ----
+  // ---- טופס 3: לוג המשימות (ששייך רק לחוקר) ----
   const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
   const LOG_FORM_BASE =
-    "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
+    "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse";
 
-  // מזהי השדות מטופס 3 (לפי ה-prefill ששלחת):
+  // מזהי השדות מטופס 3:
   // Test  → entry.152946855
   // 1     → entry.781109584
   // 12    → entry.347168050
@@ -448,13 +448,12 @@
     params.set(LOG_ENTRY_COMPLETED, String(row.completed));
     params.set(LOG_ENTRY_TIMESTAMP, row.ts);
 
-    const url = LOG_FORM_BASE + params.toString();
-
-    if (navigator.sendBeacon){
-      navigator.sendBeacon(url);
-    } else {
-      fetch(url, { method:"GET", mode:"no-cors" }).catch(()=>{});
-    }
+    // שליחה כ-POST ל-formResponse (x-www-form-urlencoded)
+    fetch(LOG_FORM_BASE, {
+      method: "POST",
+      mode: "no-cors",
+      body: params
+    }).catch(() => {});
   }
 
   // ======================= לוג משימות וסשן =======================
