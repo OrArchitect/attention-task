@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>העלאת תמונה – עמדת עבודה</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background:#020617;
+      color:#e5e7eb;
+      display:flex;
+      min-height:100vh;
+      align-items:center;
+      justify-content:center;
+    }
+    .card {
+      background:#0b1120;
+      border-radius:16px;
+      padding:20px;
+      max-width:420px;
+      width:100%;
+      box-shadow:0 20px 40px rgba(0,0,0,0.5);
+    }
+    h1 {
+      font-size:1.3rem;
+      margin-top:0;
+      margin-bottom:0.5rem;
+      text-align:right;
+    }
+    p {
+      font-size:0.9rem;
+      margin-top:0;
+      margin-bottom:0.5rem;
+      color:#cbd5f5;
+    }
+    label {
+      font-size:0.85rem;
+      display:block;
+      margin-bottom:0.25rem;
+    }
+    input[type="text"] {
+      width:100%;
+      padding:8px 10px;
+      border-radius:8px;
+      border:1px solid #1e293b;
+      background:#020617;
+      color:#e5e7eb;
+      box-sizing:border-box;
+      margin-bottom:0.75rem;
+    }
+    .video-wrap, .canvas-wrap {
+      width:100%;
+      border-radius:12px;
+      overflow:hidden;
+      background:#020617;
+      margin:0.75rem 0;
+      position:relative;
+    }
+    video, canvas, img {
+      width:100%;
+      display:block;
+    }
+    .buttons {
+      display:flex;
+      gap:8px;
+      margin-top:0.5rem;
+      flex-wrap:wrap;
+    }
+    button {
+      flex:1;
+      padding:8px 10px;
+      border-radius:999px;
+      border:none;
+      cursor:pointer;
+      font-size:0.9rem;
+      background:#e5e7eb;
+      color:#020617;
+    }
+    button.secondary {
+      background:#020617;
+      color:#e5e7eb;
+      border:1px solid #1e293b;
+    }
+    button:disabled {
+      opacity:0.4;
+      cursor:not-allowed;
+    }
+    .status {
+      margin-top:0.75rem;
+      font-size:0.85rem;
+      min-height:1.2em;
+    }
+    .small {
+      font-size:0.75rem;
+      color:#94a3b8;
+      margin-top:0.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>צילום עמדת העבודה</h1>
+    <p>
+      לפני תחילת המשימה, אנא צלם/י תמונה של עמדת העבודה שלך ולחץ/י על "העלה ושמור".
+      התמונה תישמר באופן אנונימי תחת קוד המשתתף (PID) בלבד.
+    </p>
+
+    <label for="pidInput">קוד משתתף (PID)</label>
+    <input id="pidInput" type="text" placeholder="לדוגמה: P1032" />
+
+    <div class="video-wrap" id="videoContainer">
+      <video id="video" autoplay playsinline></video>
+    </div>
+
+    <div class="canvas-wrap" id="photoContainer" style="display:none;">
+      <canvas id="photoCanvas"></canvas>
+    </div>
+
+    <div class="buttons">
+      <button id="startBtn" type="button">הפעל מצלמה</button>
+      <button id="captureBtn" type="button" disabled>צלם</button>
+      <button id="uploadBtn" type="button" disabled>העלה ושמור</button>
+    </div>
+
+    <div class="status" id="status"></div>
+    <div class="small">
+      התמונה נשמרת בחשבון האחסון של החוקר בלבד, ואינה מקושרת לשם או לחשבון Google שלך.
+      לאחר ההעלאה ניתן לסגור חלון זה ולחזור לטופס / למשימה.
+    </div>
+  </div>
+
+  <script>
+    // === הגדרות בסיסיות ===
+    const apiKey = "PASTE_YOUR_IMGBB_API_KEY_HERE"; // ← כאן להדביק את ה-API KEY מ-imgbb
+    const apiUrl = "https://api.imgbb.com/1/upload";
+
+    const pidInput      = document.getElementById("pidInput");
+    const video         = document.getElementById("video");
+    const videoContainer= document.getElementById("videoContainer");
+    const photoContainer= document.getElementById("photoContainer");
+    const photoCanvas   = document.getElementById("photoCanvas");
+    const startBtn      = document.getElementById("startBtn");
+    const captureBtn    = document.getElementById("captureBtn");
+    const uploadBtn     = document.getElementById("uploadBtn");
+    const statusEl      = document.getElementById("status");
+
+    let stream = null;
+    let imageDataBase64 = null;
+
+    // נסה לטעון PID מה-URL אם קיים (?pid=XXX)
+    (function initPidFromUrl() {
+      const params = new URLSearchParams(window.location.search);
+      const pidFromUrl = params.get("pid");
+      if (pidFromUrl) {
+        pidInput.value = pidFromUrl;
+      }
+    })();
+
+    startBtn.addEventListener("click", async () => {
+      statusEl.textContent = "";
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = stream;
+        captureBtn.disabled = false;
+        statusEl.textContent = "המצלמה הופעלה. כוון/י את המצלמה לעמדת העבודה ולחץ/י על 'צלם'.";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "לא ניתן היה להפעיל את המצלמה. אנא בדוק/י הרשאות בדפדפן.";
+      }
+    });
+
+    captureBtn.addEventListener("click", () => {
+      if (!stream) return;
+
+      const trackSettings = stream.getVideoTracks()[0].getSettings();
+      const width  = trackSettings.width  || 640;
+      const height = trackSettings.height || 480;
+
+      photoCanvas.width  = width;
+      photoCanvas.height = height;
+      const ctx = photoCanvas.getContext("2d");
+      ctx.drawImage(video, 0, 0, width, height);
+
+      // עצירת הווידאו לאחר הצילום
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+
+      // המרת התמונה ל-base64 (בלי ה-prefix)
+      const dataUrl = photoCanvas.toDataURL("image/jpeg", 0.9);
+      imageDataBase64 = dataUrl.split(",")[1];
+
+      videoContainer.style.display  = "none";
+      photoContainer.style.display  = "block";
+      uploadBtn.disabled            = false;
+      captureBtn.disabled           = true;
+
+      statusEl.textContent = "תצוגה מקדימה נשמרה. אם התמונה נראית טוב – לחץ/י 'העלה ושמור'.";
+    });
+
+    uploadBtn.addEventListener("click", async () => {
+      const pid = pidInput.value.trim();
+      if (!pid) {
+        statusEl.textContent = "נא להזין קוד משתתף (PID) לפני ההעלאה.";
+        return;
+      }
+      if (!imageDataBase64) {
+        statusEl.textContent = "לא נמצאה תמונה להעלאה. נא לצלם מחדש.";
+        return;
+      }
+
+      uploadBtn.disabled = true;
+      statusEl.textContent = "מעלה את התמונה... אנא המתן/י.";
+
+      try {
+        const formData = new FormData();
+        formData.append("key", apiKey);
+        formData.append("image", imageDataBase64);
+        formData.append("name", `pid_${pid}`);
+
+        const res = await fetch(apiUrl, {
+          method: "POST",
+          body: formData
+        });
+
+        const json = await res.json();
+        if (!json.success) {
+          console.error(json);
+          statusEl.textContent = "חלה שגיאה בהעלאה. נא לנסות שוב.";
+          uploadBtn.disabled = false;
+          return;
+        }
+
+        statusEl.textContent = "התמונה נשמרה בהצלחה. ניתן לסגור חלון זה ולחזור לטופס / למשימה.";
+        // אם תרצה בעתיד: כאן אפשר גם להציג את ה-URL לתמונה:
+        // console.log("Image URL:", json.data.url);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "שגיאת תקשורת בעת ההעלאה. נא לנסות שוב.";
+        uploadBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
