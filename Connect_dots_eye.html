@@ -196,32 +196,28 @@
     margin: 30
   };
 
-  // ======================= שליחה ל-Google Drive (JSON) =======================
-  const DRIVE_WEBAPP_URL =
+  // ======================= שליחה ל-Google Drive (כמו בגרסה הרגילה) =======================
+  const SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324almOqYy2Sq6Lg/exec";
 
-  async function uploadCsvToDrive(csvContent, prefix){
+  function sendCsvToDrive(csvContent, label) {
     if (!csvContent) return;
+
     const rawPid = (pidInput.value || "PID").trim();
-    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g,"") || "PID";
-    const ts = new Date().toISOString().replace(/[:.]/g,"");
+    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
+    const ts = new Date().toISOString().replace(/[:.]/g, "");
 
-    const filename = `${prefix}_${safePid}_${ts}.csv`;
+    const header = `# ${label} | pid=${safePid} | ts=${ts}\n`;
+    const body = header + csvContent;
 
-    try{
-      await fetch(DRIVE_WEBAPP_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename,
-          mimeType: "text/csv",
-          content: csvContent
-        })
-      });
-    }catch(err){
-      console.error("Drive upload failed", err);
-    }
+    fetch(SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body
+    }).catch(err => {
+      console.error("Failed to send CSV to Drive:", err);
+    });
   }
 
   // ---- טופס 2: טופס הסיכום ----
@@ -672,14 +668,15 @@
       logTask(false);
     }
 
+    // שליחת שני קבצי CSV ל-Drive — בדיוק כמו בגרסה הרגילה
     const tasksCsv = buildTasksCsv();
     if (tasksCsv){
-      uploadCsvToDrive(tasksCsv, "connect_the_dots_tasks");
+      sendCsvToDrive(tasksCsv, "connect_the_dots_tasks");
     }
 
     const gazeCsv = buildGazeCsv();
     if (gazeCsv){
-      uploadCsvToDrive(gazeCsv, "connect_the_dots_gaze");
+      sendCsvToDrive(gazeCsv, "connect_the_dots_gaze");
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
@@ -829,10 +826,10 @@
 
       gazeSamples.push({
         t_ms: Math.round(tSession),
-          hasGaze: true,
-          x, y,
-          inViewport
-        });
+        hasGaze: true,
+        x, y,
+        inViewport
+      });
     });
   }
 
