@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>משימת חיבור נקודות – ניסוי קשב (עם מעקב עיניים)</title>
+  <title>משימת חיבור נקודות – ניסוי קשב</title>
 
-  <!-- WebGazer -->
+  <!-- WebGazer למעקב עיניים -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js" type="text/javascript"></script>
 
   <style>
@@ -112,7 +112,7 @@
     }
     .muted{color:var(--muted);}
 
-    /* שכבת כיול */
+    /* שכבת כיול מעקב עיניים */
     #calibOverlay{
       position:absolute;
       inset:10px 16px 16px;
@@ -151,11 +151,11 @@
         <label for="pid">מזהה נבדק:</label>
         <input id="pid" type="text" placeholder="לדוגמה OR010125" />
 
-        <!-- כיול -->
+        <!-- כפתורי כיול מעקב עיניים -->
         <button id="calibBtn">כיול מעקב עיניים</button>
         <button id="finishCalibBtn" disabled>סיום כיול</button>
 
-        <!-- סשן -->
+        <!-- סשן משימה -->
         <button id="startBtn" disabled>התחל סשן</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
       </div>
@@ -165,7 +165,7 @@
   <div id="stageWrap">
     <canvas id="stage"></canvas>
 
-    <!-- שכבת נקודת הכיול -->
+    <!-- שכבת הכיול (12 נקודות, ללא מגבלת זמן) -->
     <div id="calibOverlay">
       <div id="calibDot"></div>
       <div id="calibText">הסתכל/י על הנקודה ולחץ/י עליה (1/12)</div>
@@ -186,35 +186,58 @@
 
 <script>
 (() => {
-  // ======================= CONFIG =======================
+  // ======================= הגדרות כלליות =======================
   const CONFIG = {
-    sessionMinutes: 10,
-    initialPoints: 12,
-    incrementBy: 2,
+    sessionMinutes: 10,   // משך סשן בדקות
+    initialPoints: 12,    // כמות נקודות התחלתית
+    incrementBy: 2,       // העלאת קושי בכל משימה (2 נקודות)
     minDistance: 30,
     lineAvoidDistance: 16,
     margin: 30
   };
 
-  // ====== כתובת ה-Apps Script לשמירה ב-Drive ======
-  const DRIVE_WEBAPP_URL =
-    "https://script.google.com/macros/s/AKfycbz8Zz3a69cFYJ9PYVtfPF5lUIYFWz1XFS7myrZl3n-qP1KTXW70VjSrbS4j_MG8WjTrRQ/exec";
+  // ======================= שליחה ל-Google Drive =======================
+  const SCRIPT_URL =
+    "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324almOqYy2Sq6Lg/exec";
 
-  // ---- Form 2 (summary) ----
+  function sendCsvToDrive(csvContent, label) {
+    if (!csvContent) return;
+
+    const rawPid = (pidInput.value || "PID").trim();
+    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
+    const ts = new Date().toISOString().replace(/[:.]/g, "");
+
+    const header = `# ${label} | pid=${safePid} | ts=${ts}\n`;
+    const body = header + csvContent;
+
+    fetch(SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body
+    }).catch(err => {
+      console.error("Failed to send CSV to Drive:", err);
+    });
+  }
+
+  // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
+
   const ENTRY_PID             = "entry.404955311";
-  const ENTRY_TOTAL_TASKS     = "entry.1331557537";
-  const ENTRY_POINTS_PER_TASK = "entry.742152065";
-  const ENTRY_ERRORS_PER_TASK = "entry.1634677467";
-  const ENTRY_DUR_PER_TASK    = "entry.529234118";
-  const ENTRY_EXPERIMENT_TIME = "entry.883845532";
+  const ENTRY_TOTAL_TASKS     = "entry.1331557537";  // TTC
+  const ENTRY_POINTS_PER_TASK = "entry.742152065";   // PPT
+  const ENTRY_ERRORS_PER_TASK = "entry.1634677467";  // EPT
+  const ENTRY_DUR_PER_TASK    = "entry.529234118";   // DPT
+  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME
+
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
 
-  // ---- Form 3 (task log) ----
+  // ---- טופס 3: לוג המשימות ----
   const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
   const LOG_FORM_BASE =
     "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
+
   const LOG_ENTRY_PID        = "entry.152946855";
   const LOG_ENTRY_TASK       = "entry.781109584";
   const LOG_ENTRY_N_POINTS   = "entry.347168050";
@@ -252,36 +275,36 @@
   let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
-  // Calibration
+  // --- מצבי כיול מעקב עיניים ---
   let calibrationStarted = false;
   let calibrationDone    = false;
 
-  // 12 נקודות כיול (לא מוגבל בזמן)
+  // 12 נקודות כיול – יחסיות למסך
   const CALIB_POINTS = [
-    {x:0.10, y:0.15},
-    {x:0.30, y:0.15},
-    {x:0.50, y:0.15},
-    {x:0.70, y:0.15},
-    {x:0.90, y:0.15},
-    {x:0.15, y:0.50},
-    {x:0.35, y:0.50},
-    {x:0.65, y:0.50},
-    {x:0.85, y:0.50},
-    {x:0.10, y:0.85},
-    {x:0.50, y:0.85},
-    {x:0.90, y:0.85}
+    {x:0.10,y:0.15},
+    {x:0.30,y:0.15},
+    {x:0.50,y:0.15},
+    {x:0.70,y:0.15},
+    {x:0.90,y:0.15},
+    {x:0.15,y:0.50},
+    {x:0.35,y:0.50},
+    {x:0.65,y:0.50},
+    {x:0.85,y:0.50},
+    {x:0.10,y:0.85},
+    {x:0.50,y:0.85},
+    {x:0.90,y:0.85}
   ];
   let calibIndex = 0;
 
-  // Gaze log
+  // איסוף דגימות מבט
   const gazeSamples = [];
   let lastGazeSampleTime = 0;
-  const GAZE_SAMPLE_INTERVAL = 50;
+  const GAZE_SAMPLE_INTERVAL = 50; // מילישניות בין דגימות
 
-  // ======================= Helpers =======================
+  // ======================= פונקציות עזר =======================
   function getPidFromUrl(){
-    const p = new URLSearchParams(window.location.search);
-    return p.get("pid") || "";
+    const params = new URLSearchParams(window.location.search);
+    return params.get("pid") || "";
   }
 
   function now(){
@@ -341,7 +364,7 @@
       let ok = true;
 
       for (const p of pts){
-        if (distance(p, candidate) < CONFIG.minDistance){
+        if (Math.hypot(p.x-candidate.x, p.y-candidate.y) < CONFIG.minDistance){
           ok = false;
           break;
         }
@@ -377,7 +400,7 @@
       points: generatePoints(n),
       selected: new Set(),
       selectionOrder: [],
-      errors: 0,        // כמות ניסיונות כושלים במשימה זו (רצף מלא לא נכון)
+      errors: 0,
       startTime: now()
     };
     draw();
@@ -391,7 +414,6 @@
     const pts = currentTask.points;
     const order = currentTask.selectionOrder;
 
-    // קווים לפי סדר הבחירה
     if (order.length > 1){
       ctx.strokeStyle = "#e5e7eb";
       ctx.lineWidth = 2;
@@ -405,7 +427,6 @@
       ctx.stroke();
     }
 
-    // נקודות ומספרים
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "14px system-ui, Arial";
@@ -453,7 +474,7 @@
     const n = task.points.length;
     if (order.length !== n) return false;
     for (let i=0;i<n;i++){
-      if (order[i] !== i) return false; // ציפייה: 0,1,2,...,n-1
+      if (order[i] !== i) return false;
     }
     return true;
   }
@@ -480,24 +501,20 @@
     const selected = task.selected;
 
     if (selected.has(idx)){
-      // הסרת בחירה – מסירים גם מהסדר
       selected.delete(idx);
       task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
       draw();
       return;
     }
 
-    // בחירה חדשה
     selected.add(idx);
     task.selectionOrder.push(idx);
     draw();
 
-    // אם נבחרו *כל* המספרים – בודקים האם הסדר מושלם
     if (task.selectionOrder.length === task.points.length){
       if (isPerfectSequence(task)){
         completeCurrentTask();
       } else {
-        // ניסיון כושל: העלאת מונה הטעויות ואיפוס המשימה
         task.errors += 1;
         resetAttempt(task);
       }
@@ -507,7 +524,7 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
-  // ======================= שליחה לטופס 3 (לוג משימות) =======================
+  // ======================= לוג משימות =======================
   function sendTaskToLogForm(row){
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
@@ -527,7 +544,6 @@
     }
   }
 
-  // ======================= לוג משימות =======================
   function logTask(completed){
     if (!currentTask) return;
     const endTime = now();
@@ -578,8 +594,8 @@
     }
   }
 
-  // ======================= CSV builders + העלאה ל-Drive =======================
-  function buildCsvTasks(){
+  // ======================= CSV משימות + CSV מבט =======================
+  function buildTasksCsv(){
     if (!tasks.length) return "";
     const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
     const rows = tasks.map(t =>
@@ -588,7 +604,7 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  function buildCsvGaze(){
+  function buildGazeCsv(){
     if (!gazeSamples.length) return "";
     const head = ["t_ms_session","has_gaze","x_px","y_px","in_viewport"];
     const rows = gazeSamples.map(s =>
@@ -603,25 +619,7 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  async function uploadCsvToDrive(content, filename){
-    if (!content) return;
-    try{
-      await fetch(DRIVE_WEBAPP_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({
-          filename: filename,
-          mimeType: "text/csv",
-          content: content
-        })
-      });
-    }catch(err){
-      console.error("Drive upload failed", err);
-    }
-  }
-
-  // ======== בניית המידע לטופס 2 ========
+  // ======== נתוני סיכום לטופס 2 ========
   function buildFormSummary(){
     const completedTasks = tasks.filter(t => t.completed === 1);
     const totalTasksCompleted = completedTasks.length;
@@ -662,7 +660,10 @@
   }
 
   function endSession(autoEnded){
-    if (sessionEnded) return;   // מתעלם מקריאה כפולה
+    if (sessionEnded) {
+      redirectToForm();
+      return;
+    }
     sessionEnded = true;
     running = false;
     if (tickId) clearInterval(tickId);
@@ -673,17 +674,16 @@
       logTask(false);
     }
 
-    const pid = (pidInput.value || "").trim();
-    const safePid = (pid || "PID").replace(/[^a-zA-Z0-9_-]/g,"");
-
-    const tasksCsv = buildCsvTasks();
-    if (tasksCsv){
-      uploadCsvToDrive(tasksCsv, "connect_the_dots_results_" + safePid + ".csv");
+    // שליחת CSV של המשימות
+    const tasksCsv = buildTasksCsv();
+    if (tasksCsv) {
+      sendCsvToDrive(tasksCsv, "connect_the_dots_tasks");
     }
 
-    const gazeCsv = buildCsvGaze();
-    if (gazeCsv){
-      uploadCsvToDrive(gazeCsv, "connect_the_dots_gaze_" + safePid + ".csv");
+    // שליחת CSV של מעקב העיניים
+    const gazeCsv = buildGazeCsv();
+    if (gazeCsv) {
+      sendCsvToDrive(gazeCsv, "connect_the_dots_gaze");
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
@@ -697,7 +697,7 @@
     };
   }
 
-  // ======================= כיול – 12 נקודות, בלי הגבלת זמן =======================
+  // ======================= כיול מעקב עיניים =======================
   function showCalibPoint(){
     const pt = CALIB_POINTS[calibIndex];
     calibDot.style.left = (pt.x * 100) + "%";
@@ -741,7 +741,7 @@
       await webgazer.setRegression('ridge');
       await webgazer.setTracker('clmtrackr');
 
-      // מסתיר מצלמה, מציג רק נקודות חיזוי בזמן אמת (אם תרצה)
+      // ללא תצוגת מצלמה, אפשר (זמנית) להציג נקודות חיזוי
       webgazer.params.showVideoPreview = false;
       webgazer.params.showPredictionPoints = true;
 
@@ -761,20 +761,19 @@
     if (!calibrationStarted) return;
     calibrationDone = true;
     finishCalibBtn.disabled = true;
-    pidInput.disabled = false;
-    startBtn.disabled = false;
+    startBtn.disabled = false;     // עכשיו אפשר להתחיל סשן
+    calibOverlay.style.display = "none";
 
     if (window.webgazer){
       webgazer.showVideoPreview(false);
       webgazer.showPredictionPoints(false);
     }
-    calibOverlay.style.display = "none";
   }
 
-  // ======================= Session start =======================
+  // ======================= סשן =======================
   function startSession(){
     if (!calibrationDone){
-      alert("נא לבצע קודם כיול מעקב עיניים.");
+      alert("נא לבצע קודם כיול מעקב עיניים (12 נקודות).");
       return;
     }
     const pid = (pidInput.value || "").trim();
@@ -794,6 +793,7 @@
     startBtn.disabled = true;
     endBtn.disabled = false;
 
+    // איפוס לוג המבט
     gazeSamples.length = 0;
     lastGazeSampleTime = 0;
 
@@ -847,13 +847,13 @@
     pidInput.value = urlPid;
     pidInput.readOnly = true;
   }
-  pidInput.disabled = true;
 
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
 
   startBtn.addEventListener("click", startSession);
   endBtn.addEventListener("click", handleEndClick);
+
   calibBtn.addEventListener("click", startCalibration);
   finishCalibBtn.addEventListener("click", finishCalibration);
   calibDot.addEventListener("click", handleCalibClick);
