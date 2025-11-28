@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>משימת חיבור נקודות – ניסוי קשב (עם מעקב עיניים)</title>
 
-  <!-- ספריית WebGazer למעקב עיניים -->
+  <!-- NEW: ספריית WebGazer למעקב עיניים -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js" type="text/javascript"></script>
 
   <style>
@@ -123,11 +123,11 @@
         <label for="pid">מזהה נבדק:</label>
         <input id="pid" type="text" placeholder="לדוגמה OR010125" />
 
-        <!-- כפתורי כיול חדשים -->
+        <!-- NEW: כפתורי כיול -->
         <button id="calibBtn">כיול מעקב עיניים</button>
         <button id="finishCalibBtn" disabled>סיום כיול</button>
 
-        <button id="startBtn">התחל סשן</button>
+        <button id="startBtn" disabled>התחל סשן</button> <!-- NEW: בהתחלה מושבת -->
         <button id="endBtn" disabled>סיום מוקדם</button>
       </div>
     </div>
@@ -160,7 +160,7 @@
     margin: 30
   };
 
-  // ---- טופס 2 ----
+  // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
   const ENTRY_PID             = "entry.404955311";
   const ENTRY_TOTAL_TASKS     = "entry.1331557537";
@@ -171,11 +171,10 @@
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
 
-  // ---- טופס 3 (לוג משימות) ----
+  // ---- טופס 3: לוג משימות ----
   const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
   const LOG_FORM_BASE =
     "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
-
   const LOG_ENTRY_PID        = "entry.152946855";
   const LOG_ENTRY_TASK       = "entry.781109584";
   const LOG_ENTRY_N_POINTS   = "entry.347168050";
@@ -195,8 +194,8 @@
   const overlayText = document.getElementById("overlayText");
   const overlayContinue = document.getElementById("overlayContinue");
 
-  const calibBtn = document.getElementById("calibBtn");
-  const finishCalibBtn = document.getElementById("finishCalibBtn");
+  const calibBtn = document.getElementById("calibBtn");          // NEW
+  const finishCalibBtn = document.getElementById("finishCalibBtn"); // NEW
 
   // ======================= STATE =======================
   let running = false;
@@ -210,7 +209,7 @@
   let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
-  // מצב כיול
+  // NEW: מצב כיול
   let calibrationStarted = false;
   let calibrationDone    = false;
 
@@ -220,7 +219,9 @@
     return params.get("pid") || "";
   }
 
-  function now(){ return performance.now(); }
+  function now(){
+    return performance.now();
+  }
 
   function resizeCanvas(){
     const rect = canvas.getBoundingClientRect();
@@ -273,9 +274,11 @@
       };
 
       let ok = true;
+
       for (const p of pts){
         if (distance(p, candidate) < CONFIG.minDistance){
-          ok = false; break;
+          ok = false;
+          break;
         }
       }
       if (!ok) continue;
@@ -283,7 +286,8 @@
       for (let i = 1; i < pts.length; i++){
         const d = pointToSegmentDistance(candidate, pts[i-1], pts[i]);
         if (d < CONFIG.lineAvoidDistance){
-          ok = false; break;
+          ok = false;
+          break;
         }
       }
       if (!ok) continue;
@@ -432,7 +436,7 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
-  // ======================= לוג פורם (טופס 3) =======================
+  // ======================= טופס 3 (לוג משימות) =======================
   function sendTaskToLogForm(row){
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
@@ -597,7 +601,7 @@
     };
   }
 
-  // ===== כיול מעקב עיניים =====
+  // ======================= כיול מעקב עיניים (NEW) =======================
   async function startCalibration(){
     if (!window.webgazer){
       alert("WebGazer לא נטען. ניתן לבצע את המשימה גם בלי מעקב עיניים.");
@@ -615,7 +619,8 @@
       webgazer.params.showVideoPreview = true;
       webgazer.params.showPredictionPoints = true;
       await webgazer.begin();
-      alert("הכיול התחיל. הסתכל/י על אזורים שונים במסך ולחץ/י מעט.\nלאחר מכן לחץ/י על \"סיום כיול\".");
+
+      alert("הכיול התחיל. הסתכל/י על אזורים שונים במסך ולחצי/לחץ מעט על נקודות.\nכשתסיים/י – לחץ/י על \"סיום כיול\".");
     }catch(err){
       console.error(err);
       alert("שגיאה בהפעלת WebGazer. אפשר להמשיך את המשימה בלי מעקב עיניים.");
@@ -629,13 +634,18 @@
     if (!calibrationStarted) return;
     calibrationDone = true;
     finishCalibBtn.disabled = true;
+    pidInput.disabled = false;   // אפשר עכשיו להזין PID
+    startBtn.disabled = false;   // ואפשר עקרונית להתחיל סשן
+
     if (window.webgazer){
       webgazer.showVideoPreview(false);
       webgazer.showPredictionPoints(false);
     }
-    alert("כיול הסתיים. כעת ניתן להזין PID (אם עוד לא הזנת) ולהתחיל את הסשן.");
+
+    alert("כיול הסתיים. כעת ניתן להזין מזהה נבדק ולהתחיל את הסשן.");
   }
 
+  // ======================= תחילת סשן (עם בדיקת כיול) =======================
   function startSession(){
     if (!calibrationDone){
       alert("נא לבצע קודם כיול מעקב עיניים (\"כיול מעקב עיניים\" ואז \"סיום כיול\").");
@@ -676,6 +686,9 @@
     pidInput.value = urlPid;
     pidInput.readOnly = true;
   }
+
+  // NEW: בהתחלה אסור לכתוב PID לפני כיול
+  pidInput.disabled = true;
 
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
