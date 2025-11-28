@@ -2,16 +2,22 @@
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <title>Connect-the-Dots – Eye Tracking Version (v2)</title>
+  <title>משימת חיבור נקודות – עם כיול מעקב עיניים (WebGazer)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+
+  <!-- ספריית WebGazer (מעקב עיניים דרך מצלמת אינטרנט) -->
+  <script src="https://webgazer.cs.brown.edu/webgazer.js" type="text/javascript"></script>
+
   <style>
     :root{
-      --bg:#000000;
+      --bg:#020617;
+      --panel:#0b1120;
       --ink:#e5e7eb;
       --muted:#94a3b8;
       --accent:#38bdf8;
       --error:#fb7185;
       --ok:#4ade80;
+      --stroke:#1f2933;
     }
     *{box-sizing:border-box;}
     html,body{
@@ -26,61 +32,81 @@
       display:flex;
       align-items:center;
       justify-content:center;
+      padding:1.5rem;
     }
     .shell{
       width:100%;
-      max-width:1100px;
-      padding:1.5rem;
+      max-width:960px;
+      background:var(--panel);
+      border-radius:1.5rem;
+      box-shadow:0 22px 45px rgba(15,23,42,.7);
+      padding:1.5rem 2rem 2rem;
       display:flex;
       flex-direction:column;
-      gap:1rem;
+      gap:1.25rem;
     }
     header{
       display:flex;
       justify-content:space-between;
-      align-items:center;
+      align-items:flex-start;
       gap:1rem;
       flex-wrap:wrap;
     }
     header h1{
       margin:0;
-      font-size:1.3rem;
+      font-size:1.4rem;
     }
     header p{
       margin:.25rem 0 0;
-      font-size:.8rem;
+      font-size:.85rem;
       color:var(--muted);
     }
-    .meta{
+    .pill{
+      display:inline-flex;
+      padding:.25rem .6rem;
+      border-radius:999px;
+      border:1px solid #1e293b;
+      background:#020617;
+      gap:.4rem;
+      align-items:center;
+      font-size:.8rem;
+      color:var(--muted);
+      width:fit-content;
+    }
+    .pill strong{
+      color:var(--ink);
+      font-weight:600;
+    }
+    .meta-row{
       display:flex;
       flex-wrap:wrap;
       gap:.75rem;
       font-size:.85rem;
       align-items:flex-end;
     }
-    .meta label{
+    .meta-row label{
       display:flex;
       flex-direction:column;
-      gap:.2rem;
+      gap:.25rem;
     }
-    .meta input,
-    .meta select{
+    .meta-row input,
+    .meta-row select{
       background:#020617;
-      border-radius:.5rem;
-      border:1px solid #1f2937;
-      padding:.3rem .6rem;
+      border:1px solid #1e293b;
+      border-radius:.6rem;
+      padding:.35rem .6rem;
       color:var(--ink);
-      min-width:7.5rem;
+      min-width:8rem;
     }
-    .meta input:focus,
-    .meta select:focus{
+    .meta-row input:focus,
+    .meta-row select:focus{
       outline:none;
       border-color:var(--accent);
     }
     button{
       border:none;
       border-radius:999px;
-      padding:.45rem 1.2rem;
+      padding:.5rem 1.1rem;
       font-size:.9rem;
       font-weight:500;
       cursor:pointer;
@@ -89,273 +115,354 @@
       justify-content:center;
       gap:.4rem;
     }
+    button:disabled{
+      opacity:.45;
+      cursor:default;
+    }
+    #calibBtn{
+      background:#0f172a;
+      color:var(--ink);
+      border:1px solid #1e293b;
+    }
+    #finishCalibBtn{
+      background:#0f172a;
+      color:var(--ink);
+      border:1px solid #1e293b;
+      display:none;
+    }
     #startBtn{
       background:var(--accent);
       color:#020617;
     }
-    #startBtn:disabled{
-      opacity:.4;
-      cursor:default;
-    }
-    main{
-      margin-top:.75rem;
+    .main{
       display:grid;
-      grid-template-columns:minmax(0,3fr) minmax(220px,1fr);
+      grid-template-columns:minmax(0,2fr) minmax(220px,1fr);
       gap:1rem;
     }
-    @media (max-width:900px){
-      main{grid-template-columns:1fr;}
+    @media (max-width:800px){
+      .main{grid-template-columns:1fr;}
     }
     .canvas-wrap{
       background:#020617;
       border-radius:1rem;
-      border:1px solid #1f2937;
       padding:.75rem;
+      border:1px solid #1f2937;
+      position:relative;
     }
     canvas{
-      width:100%;
-      height:520px;
       display:block;
+      width:100%;
+      height:420px;
       background:#020617;
-      border-radius:.8rem;
+      border-radius:.75rem;
     }
     .side{
-      font-size:.8rem;
-      color:var(--muted);
       display:flex;
       flex-direction:column;
       gap:.75rem;
+      font-size:.85rem;
     }
     #status{
-      min-height:2rem;
+      min-height:2.2rem;
       white-space:pre-wrap;
     }
     .ok{color:var(--ok);}
     .err{color:var(--error);}
-    .tag{
-      display:inline-flex;
-      border-radius:999px;
-      padding:.25rem .6rem;
-      border:1px solid #1f2937;
-      background:#020617;
-      gap:.3rem;
-      align-items:center;
+    ul{
+      padding-left:1.1rem;
+      margin:.25rem 0;
+      color:var(--muted);
     }
-    .tag strong{color:var(--ink);}
   </style>
 </head>
 <body>
   <div class="shell">
     <header>
       <div>
-        <h1>Connect-the-Dots – Eye Tracking Version</h1>
-        <p>המשתתף יתבקש לחבר את המספרים לפי הסדר אחרי פיקסציה קצרה באמצע המסך.</p>
+        <h1>משימת חיבור נקודות – גרסה עם כיול מעקב עיניים</h1>
+        <p>
+          קודם מבצעים כיול למצלמה (WebGazer), ואז מתחילים את המשימה הרגילה
+          של חיבור נקודות לפי סדר עולה.
+        </p>
       </div>
-      <div class="tag">
-        <span>משך:</span><strong id="timer">00:00</strong>
+      <div class="pill">
+        <span>משך המשימה:</span><strong id="timer">00:00</strong>
       </div>
     </header>
 
-    <div class="meta">
+    <div class="meta-row">
       <label>
-        Participant ID:
-        <input id="pid" placeholder="S01" autocomplete="off" />
+        מזהה נבדק:
+        <input id="pid" placeholder="לדוגמה: S01" autocomplete="off" />
       </label>
       <label>
-        Condition:
+        תנאי:
         <select id="condition">
-          <option value="A">A – Large window left</option>
-          <option value="B">B – Small window right</option>
-          <option value="C">C – No window</option>
+          <option value="A">A – חלון גדול שמאל</option>
+          <option value="B">B – חלון קטן ימין</option>
+          <option value="C">C – ללא חלון</option>
         </select>
       </label>
       <label>
-        Order:
+        סדר:
         <select id="order">
           <option value="1">1</option>
           <option value="2">2</option>
           <option value="3">3</option>
         </select>
       </label>
-      <button id="startBtn">Start task (after fixation)</button>
+
+      <button id="calibBtn">הפעלת כיול מעקב עיניים</button>
+      <button id="finishCalibBtn">סיום כיול</button>
+      <button id="startBtn" disabled>התחלת המשימה</button>
     </div>
 
-    <main>
+    <div class="main">
       <div class="canvas-wrap">
-        <canvas id="board" width="960" height="520"></canvas>
+        <canvas id="board" width="800" height="420"></canvas>
       </div>
       <div class="side">
         <div>
-          <strong>Protocol (eye-tracking):</strong>
+          <strong>שלבי הניסוי:</strong>
           <ul>
-            <li>מסך כהה.</li>
-            <li>לאחר לחיצה על Start – פיקסציה באמצע המסך (צלב לבן) למשך 1500ms.</li>
-            <li>לאחר מכן – הופעת הנקודות והתחלת המשימה.</li>
-            <li>לוג כולל אירועי FIXATION_ON, FIXATION_OFF, TASK_START, TASK_END.</li>
+            <li>1. ללחוץ על <strong>הפעלת כיול מעקב עיניים</strong> ולאשר גישה למצלמה.</li>
+            <li>2. להביט על פינות המסך ולבצע כמה קליקים במקומות שונים.</li>
+            <li>3. ללחוץ על <strong>סיום כיול</strong>.</li>
+            <li>4. ללחוץ על <strong>התחלת המשימה</strong> ולחבר את המספרים 1,2,3,...</li>
           </ul>
         </div>
         <div>
-          <strong>Status:</strong>
+          <strong>סטטוס:</strong>
           <div id="status"></div>
         </div>
       </div>
-    </main>
+    </div>
   </div>
 
   <script>
+    // ========= הגדרות שליחת CSV ל-Google Drive =========
     const SCRIPT_URL =
       "https://script.google.com/macros/s/AKfycbybO1_akQMKOO4TkATG62fJDOFWo1fwJQdmyQ_bZaIXm6Go29DcvGypYUHBJ-NW-CEQ/exec";
 
-    const canvas = document.getElementById("board");
-    const ctx = canvas.getContext("2d");
+    function sendResultsToDrive(rows, meta = {}) {
+      if (!rows || !rows.length) {
+        console.warn("sendResultsToDrive: no rows");
+        return;
+      }
+      const metaPairs = Object.entries(meta).map(([k,v]) => `${k}=${v}`);
+      let csv = "";
+      if (metaPairs.length) {
+        csv += "# " + metaPairs.join(" | ") + "\n";
+      }
+      const headers = Object.keys(rows[0]);
+      csv += headers.join(",") + "\n";
+
+      for (const row of rows) {
+        const line = headers.map(h => {
+          const val = row[h] ?? "";
+          return String(val).replace(/,/g,";");
+        }).join(",");
+        csv += line + "\n";
+      }
+
+      fetch(SCRIPT_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {"Content-Type":"text/plain;charset=utf-8"},
+        body: csv
+      }).catch(err => console.error("Failed to send results:", err));
+    }
+
+    // ========= משתני משימה =========
+    const canvas   = document.getElementById("board");
+    const ctx      = canvas.getContext("2d");
+    const timerEl  = document.getElementById("timer");
     const statusEl = document.getElementById("status");
-    const timerEl = document.getElementById("timer");
     const startBtn = document.getElementById("startBtn");
+    const calibBtn = document.getElementById("calibBtn");
+    const finishCalibBtn = document.getElementById("finishCalibBtn");
 
     const basePoints = [
-      { id: 1,  x: 0.12, y: 0.80 },
-      { id: 2,  x: 0.25, y: 0.60 },
-      { id: 3,  x: 0.18, y: 0.30 },
-      { id: 4,  x: 0.35, y: 0.18 },
-      { id: 5,  x: 0.52, y: 0.26 },
-      { id: 6,  x: 0.70, y: 0.18 },
-      { id: 7,  x: 0.84, y: 0.34 },
-      { id: 8,  x: 0.76, y: 0.60 },
-      { id: 9,  x: 0.58, y: 0.78 },
-      { id:10,  x: 0.40, y: 0.82 },
-      { id:11,  x: 0.54, y: 0.48 },
-      { id:12,  x: 0.32, y: 0.52 }
+      { id: 1,  x: 0.10, y: 0.80 },
+      { id: 2,  x: 0.25, y: 0.65 },
+      { id: 3,  x: 0.18, y: 0.35 },
+      { id: 4,  x: 0.35, y: 0.20 },
+      { id: 5,  x: 0.50, y: 0.30 },
+      { id: 6,  x: 0.65, y: 0.18 },
+      { id: 7,  x: 0.82, y: 0.30 },
+      { id: 8,  x: 0.74, y: 0.55 },
+      { id: 9,  x: 0.58, y: 0.72 },
+      { id:10, x: 0.40, y: 0.78 },
+      { id:11, x: 0.55, y: 0.50 },
+      { id:12, x: 0.32, y: 0.55 }
     ];
-
     let points = [];
-    let running = false;
-    let inFixation = false;
     let currentTarget = 1;
+    let running = false;
     let taskStartTime = 0;
     let lastClickTime = 0;
     let timerInterval = null;
 
-    const logRows = [];
+    const eventLog = [];
 
-    function resizePoints(){
-      points = basePoints.map(p=>({
-        id:p.id,
-        x:p.x*canvas.width,
-        y:p.y*canvas.height
+    let calibrationStarted = false;
+    let calibrationDone = false;
+
+    // ========= פונקציות ציור =========
+    function resizePoints() {
+      points = basePoints.map(p => ({
+        id: p.id,
+        x: p.x * canvas.width,
+        y: p.y * canvas.height
       }));
     }
 
-    function clearCanvas(){
+    function drawBoard() {
+      ctx.clearRect(0,0,canvas.width,canvas.height);
       ctx.fillStyle = "#020617";
       ctx.fillRect(0,0,canvas.width,canvas.height);
-    }
-
-    function drawFixation(){
-      clearCanvas();
-      const cx = canvas.width/2;
-      const cy = canvas.height/2;
-      ctx.strokeStyle="#e5e7eb";
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.moveTo(cx-25,cy);
-      ctx.lineTo(cx+25,cy);
-      ctx.moveTo(cx,cy-25);
-      ctx.lineTo(cx,cy+25);
-      ctx.stroke();
-    }
-
-    function drawDots(){
-      clearCanvas();
-      for(const p of points){
+      for (const p of points) {
         ctx.beginPath();
-        ctx.arc(p.x,p.y,16,0,Math.PI*2);
-        ctx.fillStyle = (running && p.id===currentTarget) ? "#38bdf8" : "#0f172a";
+        ctx.arc(p.x, p.y, 16, 0, Math.PI*2);
+        ctx.fillStyle = (p.id === currentTarget && running) ? "#38bdf8" : "#0f172a";
         ctx.fill();
         ctx.lineWidth = 2;
-        ctx.strokeStyle="#1f2937";
+        ctx.strokeStyle = "#1e293b";
         ctx.stroke();
 
-        ctx.fillStyle="#e5e7eb";
-        ctx.font="bold 14px system-ui";
-        ctx.textAlign="center";
-        ctx.textBaseline="middle";
-        ctx.fillText(String(p.id),p.x,p.y);
+        ctx.fillStyle = "#e5e7eb";
+        ctx.font = "bold 14px system-ui";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(p.id), p.x, p.y);
       }
     }
 
-    function logEvent(type, extra={}){
-      const now = performance.now();
-      logRows.push({
-        kind:"event",
-        type,
-        tMs: Math.round(now - (taskStartTime || now)),
-        ...extra
-      });
-    }
-
-    function resetTask(){
+    function resetTask() {
       resizePoints();
-      running=false;
-      inFixation=false;
-      currentTarget=1;
-      taskStartTime=0;
-      lastClickTime=0;
-      logRows.length=0;
+      currentTarget = 1;
+      running = false;
+      taskStartTime = 0;
+      lastClickTime = 0;
+      eventLog.length = 0;
       stopTimer();
-      timerEl.textContent="00:00";
-      statusEl.textContent="לביצוע: מלא/י Participant ID, בחר/י תנאי וסדר, ואז לחץ Start.";
-      clearCanvas();
+      timerEl.textContent = "00:00";
+      statusEl.textContent =
+        "תחילה יש לבצע כיול מעקב עיניים (WebGazer), ואז ניתן להתחיל את המשימה.";
+      drawBoard();
     }
 
     function startTimer(){
       stopTimer();
-      timerInterval=setInterval(()=>{
-        if(!taskStartTime || !running) return;
-        const t = Math.floor((performance.now()-taskStartTime)/1000);
-        const mm=String(Math.floor(t/60)).padStart(2,"0");
-        const ss=String(t%60).padStart(2,"0");
-        timerEl.textContent=mm+":"+ss;
+      timerInterval = setInterval(()=>{
+        if (!running) return;
+        const t = Math.floor((performance.now() - taskStartTime)/1000);
+        const mm = String(Math.floor(t/60)).padStart(2,"0");
+        const ss = String(t%60).padStart(2,"0");
+        timerEl.textContent = mm + ":" + ss;
       },250);
     }
+
     function stopTimer(){
-      if(timerInterval){
+      if (timerInterval){
         clearInterval(timerInterval);
-        timerInterval=null;
+        timerInterval = null;
       }
     }
 
-    function startProtocol(){
+    // ========= קליברציית WebGazer =========
+    async function startCalibration(){
+      if (calibrationStarted) return;
       const pid = document.getElementById("pid").value.trim();
-      if(!pid){
-        statusEl.innerHTML="<span class='err'>Please enter Participant ID first.</span>";
+      if (!pid){
+        statusEl.innerHTML =
+          "<span class='err'>נא למלא מזהה נבדק לפני תחילת הכיול.</span>";
         return;
       }
 
-      // לוג התחלה (לפני פיקסציה)
-      logEvent("TASK_INIT",{
-        screenW:window.innerWidth,
-        screenH:window.innerHeight
-      });
+      if (!window.webgazer){
+        statusEl.innerHTML =
+          "<span class='err'>WebGazer לא נטען. ניתן לבצע את הניסוי ללא מעקב עיניים.</span>";
+        return;
+      }
 
-      inFixation=true;
-      running=false;
-      currentTarget=1;
-      drawFixation();
-      statusEl.textContent="Fixation...";
+      calibrationStarted = true;
+      calibBtn.disabled = true;
+      statusEl.textContent = "פותח מצלמה... אנא אשר/י גישה.";
 
-      logEvent("FIXATION_ON");
+      try{
+        await webgazer.setRegression('ridge');
+        await webgazer.setTracker('clmtrackr');
+        webgazer.params.showVideoPreview = true;
+        webgazer.params.showPredictionPoints = true;
+        await webgazer.begin();
 
-      setTimeout(()=>{
-        inFixation=false;
-        taskStartTime=performance.now();
-        lastClickTime=taskStartTime;
-        running=true;
-        drawDots();
-        statusEl.textContent="Connect the numbers in ascending order.";
-        logEvent("FIXATION_OFF");
-        logEvent("TASK_START");
-        startTimer();
-      },1500); // 1.5 שניות פיקסציה
+        statusEl.textContent =
+          "כיול פעיל: הסתכל/י על פינות המסך ולחץ/י במסך בכמה נקודות שונות. " +
+          "לאחר מכן לחץ/י על \"סיום כיול\".";
+        finishCalibBtn.style.display = "inline-flex";
+      }catch(err){
+        console.error(err);
+        statusEl.innerHTML =
+          "<span class='err'>שגיאה בהפעלת WebGazer. ניתן להמשיך את הניסוי ללא מעקב עיניים.</span>";
+        calibrationStarted = false;
+        calibBtn.disabled = false;
+      }
+    }
+
+    function finishCalibration(){
+      if (!calibrationStarted) return;
+      calibrationDone = true;
+      startBtn.disabled = false;
+      finishCalibBtn.style.display = "none";
+      statusEl.innerHTML =
+        "<span class='ok'>הכיול הסתיים. ניתן להתחיל את משימת חיבור הנקודות.</span>";
+
+      // משאירים את WebGazer רץ (כדי שתוכל בעתיד לקרוא נתוני מבט),
+      // אבל מסתירים את הווידאו והנקודות:
+      if (window.webgazer){
+        webgazer.showVideoPreview(false);
+        webgazer.showPredictionPoints(false);
+      }
+    }
+
+    // ========= משימת חיבור נקודות (אותו דבר כמו v2) =========
+    function startTask(){
+      if (!calibrationDone){
+        statusEl.innerHTML =
+          "<span class='err'>יש לסיים קודם את הכיול (סיום כיול).</span>";
+        return;
+      }
+      const pid = document.getElementById("pid").value.trim();
+      if (!pid){
+        statusEl.innerHTML =
+          "<span class='err'>נא למלא מזהה נבדק לפני תחילת המשימה.</span>";
+        return;
+      }
+      running = true;
+      currentTarget = 1;
+      eventLog.length = 0;
+      taskStartTime = performance.now();
+      lastClickTime = taskStartTime;
+      startTimer();
+      statusEl.textContent = "המשימה החלה. התחיל/י מהמספר 1.";
+      drawBoard();
+    }
+
+    function findClickedPoint(x,y){
+      const radius = 20;
+      let best = null;
+      let bestDist = Infinity;
+      for(const p of points){
+        const dx = x - p.x;
+        const dy = y - p.y;
+        const d = Math.hypot(dx,dy);
+        if(d < radius && d < bestDist){
+          best = p;
+          bestDist = d;
+        }
+      }
+      return best ? {point:best, dist:bestDist} : null;
     }
 
     canvas.addEventListener("click", ev=>{
@@ -363,7 +470,8 @@
       const x = ev.clientX - rect.left;
       const y = ev.clientY - rect.top;
 
-      if(!running){
+      if (!running){
+        // בזמן כיול – הקליקים עדיין עוזרים ל-WebGazer, לא צריך לעשות כלום.
         return;
       }
 
@@ -371,37 +479,25 @@
       const rt = now - lastClickTime;
       lastClickTime = now;
 
-      const hit = (()=> {
-        const radius=20;
-        let best=null, bestDist=Infinity;
-        for(const p of points){
-          const dx=x-p.x, dy=y-p.y;
-          const d=Math.hypot(dx,dy);
-          if(d<radius && d<bestDist){
-            best=p; bestDist=d;
-          }
-        }
-        return best ? {point:best, dist:bestDist} : null;
-      })();
+      const hit = findClickedPoint(x,y);
 
-      if(!hit){
-        logRows.push({
-          kind:"sample",
+      if (!hit){
+        eventLog.push({
           type:"miss",
-          order:currentTarget,
+          order: currentTarget,
           clickX:x,
           clickY:y,
           rtMs:Math.round(rt),
-          tMs:Math.round(now-taskStartTime)
+          timestampMs:Math.round(now - taskStartTime)
         });
-        statusEl.innerHTML="<span class='err'>Miss – try to click exactly on " + currentTarget + ".</span>";
+        statusEl.innerHTML =
+          "<span class='err'>לחיצה ריקה – נסה/י שוב על המספר " + currentTarget + ".</span>";
         return;
       }
 
       const correct = hit.point.id === currentTarget;
 
-      logRows.push({
-        kind:"sample",
+      eventLog.push({
         type:"click",
         fromId:hit.point.id,
         expectedId:currentTarget,
@@ -412,86 +508,66 @@
         pointY:hit.point.y,
         distanceToCenter:Math.round(hit.dist),
         rtMs:Math.round(rt),
-        tMs:Math.round(now-taskStartTime)
+        timestampMs:Math.round(now - taskStartTime)
       });
 
-      if(!correct){
-        statusEl.innerHTML="<span class='err'>Wrong number – you should look for " + currentTarget + ".</span>";
+      if (!correct){
+        statusEl.innerHTML =
+          "<span class='err'>זה לא המספר הנכון. חפש/י את " + currentTarget + ".</span>";
         return;
       }
 
-      if(currentTarget>1){
-        const prev=points.find(p=>p.id===currentTarget-1);
+      if (currentTarget > 1){
+        const prev = points.find(p=>p.id===currentTarget-1);
         ctx.beginPath();
-        ctx.moveTo(prev.x,prev.y);
-        ctx.lineTo(hit.point.x,hit.point.y);
-        ctx.strokeStyle="#38bdf8";
-        ctx.lineWidth=3;
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(hit.point.x, hit.point.y);
+        ctx.strokeStyle = "#38bdf8";
+        ctx.lineWidth = 3;
         ctx.stroke();
       }
 
       currentTarget++;
-      if(currentTarget>points.length){
-        running=false;
+      if (currentTarget > points.length){
+        // סיום משימה
+        running = false;
         stopTimer();
-        const totalMs=Math.round(now-taskStartTime);
-        statusEl.innerHTML="<span class='ok'>Task finished. Total time: "+totalMs+" ms.</span>";
-        logEvent("TASK_END",{totalTimeMs:totalMs});
+        const totalMs = Math.round(now - taskStartTime);
+        statusEl.innerHTML =
+          "<span class='ok'>המשימה הסתיימה! זמן כולל: " + totalMs + " מילישניות.</span>";
 
         const pid = document.getElementById("pid").value.trim() || "no_id";
         const condition = document.getElementById("condition").value;
         const order = document.getElementById("order").value;
 
-        sendResultsToDrive(logRows,{
-          participantId:pid,
+        sendResultsToDrive(eventLog, {
+          participantId: pid,
           condition,
           order,
-          version:"connect_dots_v2_eye",
-          totalTimeMs:totalMs,
-          screenW:window.innerWidth,
-          screenH:window.innerHeight
+          version: "connect_dots_v2_eye_webgazer",
+          totalTimeMs: totalMs,
+          screenW: window.innerWidth,
+          screenH: window.innerHeight
         });
         return;
       }
 
-      statusEl.textContent="Good. Now look for "+currentTarget+".";
-      drawDots();
+      statusEl.textContent = "מצוין. עכשיו לחפש את " + currentTarget + ".";
+      drawBoard();
     });
 
-    // ---------- שליחת הנתונים ל-Drive ----------
+    // ניקוי WebGazer כשסוגרים את הדף
+    window.addEventListener("beforeunload", () => {
+      if (window.webgazer){
+        webgazer.end();
+      }
+    });
 
-    function sendResultsToDrive(rows, meta={}){
-      if(!rows || !rows.length){
-        console.warn("sendResultsToDrive: no rows");
-        return;
-      }
-      const metaPairs = Object.entries(meta).map(([k,v])=>`${k}=${v}`);
-      let csv = "";
-      if(metaPairs.length){
-        csv += "# " + metaPairs.join(" | ") + "\n";
-      }
-      const headers = Object.keys(rows[0]);
-      csv += headers.join(",") + "\n";
-      for(const row of rows){
-        const line = headers.map(h=>{
-          const val=row[h] ?? "";
-          return String(val).replace(/,/g,";");
-        }).join(",");
-        csv += line + "\n";
-      }
-      fetch(SCRIPT_URL,{
-        method:"POST",
-        mode:"no-cors",
-        headers:{"Content-Type":"text/plain;charset=utf-8"},
-        body:csv
-      }).catch(err=>{
-        console.error("Failed to send results:",err);
-      });
-    }
-
-    // אתחול
+    // אתחול ראשוני
     resetTask();
-    startBtn.addEventListener("click", ()=>{ startProtocol(); });
+    calibBtn.addEventListener("click", startCalibration);
+    finishCalibBtn.addEventListener("click", finishCalibration);
+    startBtn.addEventListener("click", startTask);
   </script>
 </body>
 </html>
