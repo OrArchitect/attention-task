@@ -196,18 +196,16 @@
     margin: 30
   };
 
-  // ======================= שליחה ל-Google Drive =======================
+  // ======================= שליחה ל-Google Drive (JSON) =======================
   const DRIVE_WEBAPP_URL =
-    "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324alm0QyY2Sq6Lg/exec";
+    "https://script.google.com/macros/s/AKfycbyVXVWJBJix8aL1CvN1kLsz_QJu_pp8fQK8I6gDr2y2a-RtTiccE324alm0QyY2Sq6Lg/exec";
 
-  function sendCsvToDrive(csvContent, prefix){
+  function sendCsvToDrive(csvContent, prefix, safePid){
     if (!csvContent) return;
 
-    const rawPid = (pidInput.value || "PID").trim();
-    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
+    const pidPart = safePid || "PID";
     const ts = new Date().toISOString().replace(/[:.]/g, "");
-
-    const filename = `${prefix}_${safePid}_${ts}.csv`;
+    const filename = `${prefix}_${pidPart}_${ts}.csv`;
 
     fetch(DRIVE_WEBAPP_URL, {
       method: "POST",
@@ -586,7 +584,7 @@
   }
 
   // ======================= CSV =======================
-  function buildCsvTasks(){
+  function buildTasksCsv(){
     if(!tasks.length) return "";
     const head=["pid","task","n_points","errors","duration_ms","completed","ts"];
     const rows=tasks.map(t=>[
@@ -595,7 +593,7 @@
     return head.join(",")+"\n"+rows.join("\n");
   }
 
-  function buildCsvGaze(){
+  function buildGazeCsv(){
     if(!gazeSamples.length) return "";
     const head=["t_ms_session","has_gaze","x_px","y_px","in_viewport"];
     const rows=gazeSamples.map(s=>[
@@ -606,16 +604,6 @@
       s.inViewport?1:0
     ].join(","));
     return head.join(",")+"\n"+rows.join("\n");
-  }
-
-  function downloadCsv(content,filename){
-    if(!content) return;
-    const blob=new Blob([content],{type:"text/csv"});
-    const a=document.createElement("a");
-    a.href=URL.createObjectURL(blob);
-    a.download=filename;
-    document.body.appendChild(a);
-    a.click();
   }
 
   // ======================= סיכום לטופס 2 =======================
@@ -659,7 +647,10 @@
   }
 
   function endSession(autoEnded){
-    if(sessionEnded){ redirectToForm(); return; }
+    if(sessionEnded){ 
+      redirectToForm(); 
+      return; 
+    }
     sessionEnded=true;
     running=false;
     if(tickId) clearInterval(tickId);
@@ -671,23 +662,23 @@
     const pid=(pidInput.value||"").trim();
     const safePid=(pid||"PID").replace(/[^a-zA-Z0-9_-]/g,"");
 
-    const tasksCsv=buildCsvTasks();
+    // שליחת קובץ המשימות ל-Drive
+    const tasksCsv = buildTasksCsv();
     if(tasksCsv){
-      downloadCsv(tasksCsv,"connect_the_dots_results_"+safePid+".csv");
-      sendCsvToDrive(tasksCsv, "connect_the_dots_tasks");
+      sendCsvToDrive(tasksCsv, "connect_the_dots_tasks", safePid);
     }
 
-    const gazeCsv=buildCsvGaze();
+    // שליחת קובץ מעקב העיניים ל-Drive
+    const gazeCsv = buildGazeCsv();
     if(gazeCsv){
-      downloadCsv(gazeCsv,"connect_the_dots_gaze_"+safePid+".csv");
-      sendCsvToDrive(gazeCsv, "connect_the_dots_gaze");
+      sendCsvToDrive(gazeCsv, "connect_the_dots_gaze", safePid);
     }
 
     overlayTitle.textContent=autoEnded?"הסשן הסתיים":"הסשן הופסק";
     overlayText.textContent="תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
     overlayContinue.textContent="המשך לשאלון";
     overlay.style.display="grid";
-    overlayContinue.onclick=()=>{overlay.style.display="none";redirectToForm();}
+    overlayContinue.onclick=()=>{overlay.style.display="none";redirectToForm();};
   }
 
   // ======================= כיול מעקב עיניים =======================
@@ -734,7 +725,8 @@
       await webgazer.setRegression('ridge');
       await webgazer.setTracker('clmtrackr');
 
-      webgazer.params.showVideoPreview = false;   // לא מציגים מצלמה
+      // לא מציגים וידאו של המצלמה
+      webgazer.params.showVideoPreview = false;
       webgazer.params.showPredictionPoints = true;
 
       await webgazer.begin();
