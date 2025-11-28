@@ -49,7 +49,7 @@
       background: #f3f4f6;
       border: 1px solid #e5e7eb;
       white-space: pre-wrap;
-      direction: ltr; /* שיהיה קל לקרוא שגיאות */
+      direction: ltr;
       font-size: 0.9rem;
     }
   </style>
@@ -73,9 +73,9 @@ id,name,score
   <div id="status"></div>
 
   <script>
-    // ה-URL החדש של ה-Apps Script שלך
+    // ה-URL שנתת לי (exec)
     const SCRIPT_URL =
-      "https://script.google.com/macros/s/AKfycbzBR6TE4lF2guDcOK0vl9hJoayNLgGSRmGxZ3tZbqBp8vSCtYTD2SrLDZ_flZxYzKETsA/exec";
+      "https://script.google.com/macros/s/AKfycbybO1_akQMKOO4TkATG62fJDOFWo1fwJQdmyQ_bZaIXm6Go29DcvGypYUHBJ-NW-CEQ/exec";
 
     async function sendCsv() {
       const statusEl = document.getElementById("status");
@@ -86,28 +86,20 @@ id,name,score
       btn.disabled = true;
 
       try {
-        const response = await fetch(SCRIPT_URL, {
+        await fetch(SCRIPT_URL, {
           method: "POST",
+          mode: "no-cors",           // כדי להימנע מ-CORS ו-Failed to fetch
           headers: {
-            // כותרת פשוטה כדי להימנע מבעיות CORS
             "Content-Type": "text/plain;charset=utf-8"
           },
           body: csv
         });
 
-        const text = await response.text();
-
-        if (!response.ok) {
-          statusEl.textContent =
-            "שגיאה בתשובה מהשרת:\n" +
-            response.status + " " + response.statusText + "\n\n" +
-            text;
-        } else {
-          statusEl.textContent = "הבקשה הצליחה.\nתשובת השרת: " + text;
-        }
+        statusEl.textContent =
+          "הבקשה נשלחה.\nבדוק עכשיו ב-Google Drive (My Drive) אם נוצר קובץ results_....csv.";
       } catch (err) {
         statusEl.textContent =
-          "שגיאה ברשת (Failed to fetch?):\n" + err.message;
+          "שגיאה ברשת:\n" + err.message;
       } finally {
         btn.disabled = false;
       }
