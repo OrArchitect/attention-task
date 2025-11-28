@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <title>משימת חיבור נקודות – עם כיול מעקב עיניים</title>
+  <title>משימת חיבור נקודות – v2 (עם כיול מעקב עיניים)</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
   <!-- ספריית WebGazer למעקב עיניים -->
@@ -119,6 +119,10 @@
       opacity:.45;
       cursor:default;
     }
+    #startBtn{
+      background:var(--accent);
+      color:#020617;
+    }
     #calibBtn,
     #finishCalibBtn{
       background:#020617;
@@ -127,10 +131,6 @@
     }
     #finishCalibBtn{
       display:none;
-    }
-    #startBtn{
-      background:var(--accent);
-      color:#020617;
     }
     .main{
       display:grid;
@@ -176,11 +176,8 @@
   <div class="shell">
     <header>
       <div>
-        <h1>משימת חיבור נקודות – גרסה עם כיול מעקב עיניים</h1>
-        <p>
-          בהתחלה מבצעים כיול למצלמה (WebGazer), ולאחר מכן מבצעים בדיוק את אותה משימה
-          כמו בגרסה הרגילה – חיבור מספרים לפי הסדר העולה.
-        </p>
+        <h1>משימת חיבור נקודות – v2</h1>
+        <p>חבר/י את המספרים לפי הסדר העולה (1, 2, 3, ...) במהירות ובדיוק מירביים.</p>
       </div>
       <div class="pill">
         <span>משך המשימה:</span><strong id="timer">00:00</strong>
@@ -209,9 +206,12 @@
         </select>
       </label>
 
-      <button id="calibBtn">הפעלת כיול מעקב עיניים</button>
+      <!-- שני הכפתורים החדשים -->
+      <button id="calibBtn">כיול מעקב עיניים</button>
       <button id="finishCalibBtn">סיום כיול</button>
-      <button id="startBtn" disabled>התחלת המשימה</button>
+
+      <!-- כמו בקובץ הרגיל -->
+      <button id="startBtn">התחלת המשימה</button>
     </div>
 
     <div class="main">
@@ -222,11 +222,9 @@
         <div>
           <strong>הוראות:</strong>
           <ul>
-            <li>1. מלא/י מזהה נבדק, תנאי וסדר.</li>
-            <li>2. לחץ/י על <strong>הפעלת כיול מעקב עיניים</strong> ואשר/י גישה למצלמה.</li>
-            <li>3. הסתכל/י על פינות המסך, הזז/י את הראש מעט ולחץ/י במספר נקודות שונות.</li>
-            <li>4. לחץ/י על <strong>סיום כיול</strong>.</li>
-            <li>5. כעת ניתן ללחוץ <strong>התחלת המשימה</strong> ולחבר את המספרים לפי סדר עולה.</li>
+            <li>לחץ/י על 1 ואז על 2, 3 וכן הלאה.</li>
+            <li>הקוים יצוירו אוטומטית רק כאשר הבחירה נכונה.</li>
+            <li>טעויות נרשמות בלוג אך אינן מציירות קו.</li>
           </ul>
         </div>
         <div>
@@ -238,7 +236,7 @@
   </div>
 
   <script>
-    // ===== שליחת CSV ל-Drive (אותו מנגנון כמו בגרסה הרגילה) =====
+    // ===== שליחת CSV ל-Drive (כמו בגרסה הרגילה) =====
     const SCRIPT_URL =
       "https://script.google.com/macros/s/AKfycbybO1_akQMKOO4TkATG62fJDOFWo1fwJQdmyQ_bZaIXm6Go29DcvGypYUHBJ-NW-CEQ/exec";
 
@@ -247,10 +245,8 @@
       const metaPairs = Object.entries(meta).map(([k,v]) => `${k}=${v}`);
       let csv = "";
       if (metaPairs.length) csv += "# " + metaPairs.join(" | ") + "\n";
-
       const headers = Object.keys(rows[0]);
       csv += headers.join(",") + "\n";
-
       for (const row of rows) {
         const line = headers.map(h => {
           const val = row[h] ?? "";
@@ -258,7 +254,6 @@
         }).join(",");
         csv += line + "\n";
       }
-
       fetch(SCRIPT_URL,{
         method:"POST",
         mode:"no-cors",
@@ -267,7 +262,7 @@
       }).catch(err=>console.error("Failed to send results:",err));
     }
 
-    // ===== לוגיקה של המשימה – מועתקת מהגרסה הרגילה =====
+    // ===== לוגיקת המשימה – זהה לגרסה הרגילה =====
     const canvas   = document.getElementById("board");
     const ctx      = canvas.getContext("2d");
     const timerEl  = document.getElementById("timer");
@@ -299,6 +294,7 @@
     let timerInterval = null;
     const eventLog = [];
 
+    // משתני כיול
     let calibrationStarted = false;
     let calibrationDone    = false;
 
@@ -340,8 +336,7 @@
       eventLog.length = 0;
       stopTimer();
       timerEl.textContent = "00:00";
-      statusEl.textContent =
-        "ראשית יש לבצע כיול מעקב עיניים, לאחר מכן ניתן להתחיל את המשימה.";
+      statusEl.textContent = "לחץ/י על \"התחלת המשימה\".";
       drawBoard();
     }
 
@@ -377,18 +372,11 @@
 
     // ===== כיול WebGazer =====
     async function startCalibration(){
-      const pid = document.getElementById("pid").value.trim();
-      if(!pid){
-        statusEl.innerHTML = "<span class='err'>נא למלא מזהה נבדק לפני הכיול.</span>";
-        return;
-      }
-
       if(!window.webgazer){
         statusEl.innerHTML =
-          "<span class='err'>WebGazer לא נטען. ניתן להמשיך את המשימה ללא מעקב עיניים.</span>";
+          "<span class='err'>WebGazer לא נטען. ניתן לבצע את המשימה גם בלי מעקב עיניים.</span>";
         return;
       }
-
       if(calibrationStarted) return;
       calibrationStarted = true;
       calibBtn.disabled = true;
@@ -401,26 +389,25 @@
         webgazer.params.showPredictionPoints = true;
         await webgazer.begin();
 
-        statusEl.textContent =
-          "הכיול פעיל. הסתכל/י על פינות המסך ולחץ/י במספר נקודות שונות. " +
-          "לאחר מכן לחץ/י על \"סיום כיול\".";
         finishCalibBtn.style.display = "inline-flex";
+        statusEl.textContent =
+          "הכיול פעיל – הסתכל/י על אזורים שונים במסך ובצע/י כמה קליקים. " +
+          "כאשר מרגיש/ה שהכיול טוב, לחץ/י על \"סיום כיול\".";
       }catch(err){
         console.error(err);
-        statusEl.innerHTML =
-          "<span class='err'>שגיאה בהפעלת WebGazer. אפשר להמשיך בלי מעקב עיניים.</span>";
         calibrationStarted = false;
         calibBtn.disabled = false;
+        statusEl.innerHTML =
+          "<span class='err'>שגיאה בהפעלת WebGazer. ניתן להמשיך את המשימה גם בלי מעקב עיניים.</span>";
       }
     }
 
     function finishCalibration(){
       if(!calibrationStarted) return;
       calibrationDone = true;
-      startBtn.disabled = false;
-      finishCalibBtn.style.display="none";
+      finishCalibBtn.style.display = "none";
       statusEl.innerHTML =
-        "<span class='ok'>הכיול הסתיים. ניתן להתחיל את המשימה.</span>";
+        "<span class='ok'>הכיול הושלם. כעת ניתן להזין PID וללחוץ על \"התחלת המשימה\".</span>";
 
       if(window.webgazer){
         webgazer.showVideoPreview(false);
@@ -428,19 +415,20 @@
       }
     }
 
-    // ===== התחלת המשימה (אחרי כיול) =====
+    // ===== התחלת המשימה (עם בדיקות כיול ו-PID) =====
     function startTask(){
       if(!calibrationDone){
         statusEl.innerHTML =
-          "<span class='err'>יש לסיים קודם את הכיול (לחיצה על \"סיום כיול\").</span>";
+          "<span class='err'>יש לבצע קודם כיול מעקב עיניים (\"כיול מעקב עיניים\" ואז \"סיום כיול\").</span>";
         return;
       }
       const pid = document.getElementById("pid").value.trim();
       if(!pid){
         statusEl.innerHTML =
-          "<span class='err'>נא למלא מזהה נבדק לפני תחילת המשימה.</span>";
+          "<span class='err'>נא להזין מזהה נבדק (PID) לפני תחילת המשימה.</span>";
         return;
       }
+
       running = true;
       currentTarget=1;
       eventLog.length=0;
@@ -457,7 +445,7 @@
       const y = ev.clientY - rect.top;
 
       if(!running){
-        // בזמן הכיול – הקליקים משמשים את WebGazer, אין משימה
+        // בזמן הכיול – הקליקים עוזרים ל-WebGazer בלבד
         return;
       }
 
@@ -503,7 +491,6 @@
         return;
       }
 
-      // מציירים קו בין הנקודה הקודמת לנוכחית
       if(currentTarget>1){
         const prev = points.find(p=>p.id===currentTarget-1);
         ctx.beginPath();
