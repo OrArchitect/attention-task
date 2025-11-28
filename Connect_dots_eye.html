@@ -188,47 +188,51 @@
 (() => {
   // ======================= הגדרות כלליות =======================
   const CONFIG = {
-    sessionMinutes: 10,   // משך סשן בדקות
-    initialPoints: 12,    // כמות נקודות התחלתית
-    incrementBy: 2,       // העלאת קושי בכל משימה (2 נקודות)
+    sessionMinutes: 10,
+    initialPoints: 12,
+    incrementBy: 2,
     minDistance: 30,
     lineAvoidDistance: 16,
     margin: 30
   };
 
-  // ======================= שליחה ל-Google Drive =======================
-  const SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324almOqYy2Sq6Lg/exec";
+  // ======================= שליחה ל-Google Drive (JSON) =======================
+  const DRIVE_WEBAPP_URL =
+    "https://script.google.com/macros/s/AKfycbz8Zz3a69cFYJ9PYVtfPF5lUIYFWz1XFS7myrZl3n-qP1KTXW70VjSrbS4j_MG8WjTrRQ/exec";
 
-  function sendCsvToDrive(csvContent, label) {
+  async function uploadCsvToDrive(csvContent, prefix){
     if (!csvContent) return;
-
     const rawPid = (pidInput.value || "PID").trim();
-    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
-    const ts = new Date().toISOString().replace(/[:.]/g, "");
+    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g,"") || "PID";
+    const ts = new Date().toISOString().replace(/[:.]/g,"");
 
-    const header = `# ${label} | pid=${safePid} | ts=${ts}\n`;
-    const body = header + csvContent;
+    const filename = `${prefix}_${safePid}_${ts}.csv`;
 
-    fetch(SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body
-    }).catch(err => {
-      console.error("Failed to send CSV to Drive:", err);
-    });
+    try{
+      await fetch(DRIVE_WEBAPP_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          mimeType: "text/csv",
+          content: csvContent
+        })
+      });
+    }catch(err){
+      console.error("Drive upload failed", err);
+    }
   }
 
   // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
 
   const ENTRY_PID             = "entry.404955311";
-  const ENTRY_TOTAL_TASKS     = "entry.1331557537";  // TTC
-  const ENTRY_POINTS_PER_TASK = "entry.742152065";   // PPT
-  const ENTRY_ERRORS_PER_TASK = "entry.1634677467";  // EPT
-  const ENTRY_DUR_PER_TASK    = "entry.529234118";   // DPT
-  const ENTRY_EXPERIMENT_TIME = "entry.883845532";   // TIME
+  const ENTRY_TOTAL_TASKS     = "entry.1331557537";
+  const ENTRY_POINTS_PER_TASK = "entry.742152065";
+  const ENTRY_ERRORS_PER_TASK = "entry.1634677467";
+  const ENTRY_DUR_PER_TASK    = "entry.529234118";
+  const ENTRY_EXPERIMENT_TIME = "entry.883845532";
 
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
@@ -299,7 +303,7 @@
   // איסוף דגימות מבט
   const gazeSamples = [];
   let lastGazeSampleTime = 0;
-  const GAZE_SAMPLE_INTERVAL = 50; // מילישניות בין דגימות
+  const GAZE_SAMPLE_INTERVAL = 50; // מ״ש בין דגימות
 
   // ======================= פונקציות עזר =======================
   function getPidFromUrl(){
@@ -307,9 +311,7 @@
     return params.get("pid") || "";
   }
 
-  function now(){
-    return performance.now();
-  }
+  function now(){ return performance.now(); }
 
   function resizeCanvas(){
     const rect = canvas.getBoundingClientRect();
@@ -322,10 +324,6 @@
 
   function randomBetween(min,max){
     return min + Math.random() * (max - min);
-  }
-
-  function distance(a,b){
-    return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
   function pointToSegmentDistance(p,a,b){
@@ -674,16 +672,14 @@
       logTask(false);
     }
 
-    // שליחת CSV של המשימות
     const tasksCsv = buildTasksCsv();
-    if (tasksCsv) {
-      sendCsvToDrive(tasksCsv, "connect_the_dots_tasks");
+    if (tasksCsv){
+      uploadCsvToDrive(tasksCsv, "connect_the_dots_tasks");
     }
 
-    // שליחת CSV של מעקב העיניים
     const gazeCsv = buildGazeCsv();
-    if (gazeCsv) {
-      sendCsvToDrive(gazeCsv, "connect_the_dots_gaze");
+    if (gazeCsv){
+      uploadCsvToDrive(gazeCsv, "connect_the_dots_gaze");
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
@@ -741,8 +737,7 @@
       await webgazer.setRegression('ridge');
       await webgazer.setTracker('clmtrackr');
 
-      // ללא תצוגת מצלמה, אפשר (זמנית) להציג נקודות חיזוי
-      webgazer.params.showVideoPreview = false;
+      webgazer.params.showVideoPreview = false;   // לא מציגים מצלמה
       webgazer.params.showPredictionPoints = true;
 
       await webgazer.begin();
@@ -761,7 +756,7 @@
     if (!calibrationStarted) return;
     calibrationDone = true;
     finishCalibBtn.disabled = true;
-    startBtn.disabled = false;     // עכשיו אפשר להתחיל סשן
+    startBtn.disabled = false;
     calibOverlay.style.display = "none";
 
     if (window.webgazer){
@@ -781,6 +776,7 @@
       alert("נא למלא מזהה נבדק לפני תחילת הסשן.");
       return;
     }
+
     running = true;
     sessionEnded = false;
     sessionStart = now();
@@ -793,7 +789,6 @@
     startBtn.disabled = true;
     endBtn.disabled = false;
 
-    // איפוס לוג המבט
     gazeSamples.length = 0;
     lastGazeSampleTime = 0;
 
@@ -834,10 +829,10 @@
 
       gazeSamples.push({
         t_ms: Math.round(tSession),
-        hasGaze: true,
-        x, y,
-        inViewport
-      });
+          hasGaze: true,
+          x, y,
+          inViewport
+        });
     });
   }
 
