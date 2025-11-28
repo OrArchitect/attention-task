@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <title>בדיקת שליחת CSV ל-Drive</title>
+</head>
+<body>
+  <h1>בדיקת שליחת CSV ל-Drive</h1>
+  <p>לחץ על הכפתור כדי לשלוח קובץ בדיקה ל-Google Drive דרך ה-Apps Script.</p>
+  <button id="sendBtn">שלח קובץ בדיקה</button>
+
+  <pre id="log" style="margin-top:1rem; background:#eee; padding:0.5rem;"></pre>
+
+<script>
+const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8Zz3a69cFYJ9PYVtfPF5lUIYFWz1XFS7myrZl3n-qP1KTXW70VjSrbS4j_MG8WjTrRQ/exec";
+
+function log(msg){
+  const pre = document.getElementById('log');
+  pre.textContent += msg + "\n";
+}
+
+document.getElementById('sendBtn').onclick = () => {
+  const payload = {
+    pid: "TEST_MANUAL",
+    variant: "test",
+    tasksCsv: "pid,task,value\nTEST_MANUAL,1,123",
+    summaryCsv: "pid,total\nTEST_MANUAL,1",
+    gazeCsv: ""
+  };
+
+  log("שולח בקשה ל-Apps Script...");
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    headers: {"Content-Type":"application/json"},
+    body: JSON.stringify(payload)
+  })
+  .then(r => r.text())
+  .then(t => {
+    log("תגובה מהשרת:");
+    log(t);
+  })
+  .catch(err => {
+    log("שגיאה:");
+    log(String(err));
+    console.error(err);
+  });
+};
+</script>
+</body>
+</html>
