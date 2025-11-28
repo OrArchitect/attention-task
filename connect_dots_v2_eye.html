@@ -2,10 +2,10 @@
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <title>משימת חיבור נקודות – עם כיול מעקב עיניים (WebGazer)</title>
+  <title>משימת חיבור נקודות – עם כיול מעקב עיניים</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
 
-  <!-- ספריית WebGazer (מעקב עיניים דרך מצלמת אינטרנט) -->
+  <!-- ספריית WebGazer למעקב עיניים -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js" type="text/javascript"></script>
 
   <style>
@@ -119,15 +119,13 @@
       opacity:.45;
       cursor:default;
     }
-    #calibBtn{
-      background:#0f172a;
+    #calibBtn,
+    #finishCalibBtn{
+      background:#020617;
       color:var(--ink);
       border:1px solid #1e293b;
     }
     #finishCalibBtn{
-      background:#0f172a;
-      color:var(--ink);
-      border:1px solid #1e293b;
       display:none;
     }
     #startBtn{
@@ -147,7 +145,6 @@
       border-radius:1rem;
       padding:.75rem;
       border:1px solid #1f2937;
-      position:relative;
     }
     canvas{
       display:block;
@@ -181,8 +178,8 @@
       <div>
         <h1>משימת חיבור נקודות – גרסה עם כיול מעקב עיניים</h1>
         <p>
-          קודם מבצעים כיול למצלמה (WebGazer), ואז מתחילים את המשימה הרגילה
-          של חיבור נקודות לפי סדר עולה.
+          בהתחלה מבצעים כיול למצלמה (WebGazer), ולאחר מכן מבצעים בדיוק את אותה משימה
+          כמו בגרסה הרגילה – חיבור מספרים לפי הסדר העולה.
         </p>
       </div>
       <div class="pill">
@@ -223,12 +220,13 @@
       </div>
       <div class="side">
         <div>
-          <strong>שלבי הניסוי:</strong>
+          <strong>הוראות:</strong>
           <ul>
-            <li>1. ללחוץ על <strong>הפעלת כיול מעקב עיניים</strong> ולאשר גישה למצלמה.</li>
-            <li>2. להביט על פינות המסך ולבצע כמה קליקים במקומות שונים.</li>
-            <li>3. ללחוץ על <strong>סיום כיול</strong>.</li>
-            <li>4. ללחוץ על <strong>התחלת המשימה</strong> ולחבר את המספרים 1,2,3,...</li>
+            <li>1. מלא/י מזהה נבדק, תנאי וסדר.</li>
+            <li>2. לחץ/י על <strong>הפעלת כיול מעקב עיניים</strong> ואשר/י גישה למצלמה.</li>
+            <li>3. הסתכל/י על פינות המסך, הזז/י את הראש מעט ולחץ/י במספר נקודות שונות.</li>
+            <li>4. לחץ/י על <strong>סיום כיול</strong>.</li>
+            <li>5. כעת ניתן ללחוץ <strong>התחלת המשימה</strong> ולחבר את המספרים לפי סדר עולה.</li>
           </ul>
         </div>
         <div>
@@ -240,20 +238,16 @@
   </div>
 
   <script>
-    // ========= הגדרות שליחת CSV ל-Google Drive =========
+    // ===== שליחת CSV ל-Drive (אותו מנגנון כמו בגרסה הרגילה) =====
     const SCRIPT_URL =
       "https://script.google.com/macros/s/AKfycbybO1_akQMKOO4TkATG62fJDOFWo1fwJQdmyQ_bZaIXm6Go29DcvGypYUHBJ-NW-CEQ/exec";
 
     function sendResultsToDrive(rows, meta = {}) {
-      if (!rows || !rows.length) {
-        console.warn("sendResultsToDrive: no rows");
-        return;
-      }
+      if (!rows || !rows.length) return;
       const metaPairs = Object.entries(meta).map(([k,v]) => `${k}=${v}`);
       let csv = "";
-      if (metaPairs.length) {
-        csv += "# " + metaPairs.join(" | ") + "\n";
-      }
+      if (metaPairs.length) csv += "# " + metaPairs.join(" | ") + "\n";
+
       const headers = Object.keys(rows[0]);
       csv += headers.join(",") + "\n";
 
@@ -265,15 +259,15 @@
         csv += line + "\n";
       }
 
-      fetch(SCRIPT_URL, {
-        method: "POST",
-        mode: "no-cors",
-        headers: {"Content-Type":"text/plain;charset=utf-8"},
-        body: csv
-      }).catch(err => console.error("Failed to send results:", err));
+      fetch(SCRIPT_URL,{
+        method:"POST",
+        mode:"no-cors",
+        headers:{"Content-Type":"text/plain;charset=utf-8"},
+        body:csv
+      }).catch(err=>console.error("Failed to send results:",err));
     }
 
-    // ========= משתני משימה =========
+    // ===== לוגיקה של המשימה – מועתקת מהגרסה הרגילה =====
     const canvas   = document.getElementById("board");
     const ctx      = canvas.getContext("2d");
     const timerEl  = document.getElementById("timer");
@@ -292,28 +286,27 @@
       { id: 7,  x: 0.82, y: 0.30 },
       { id: 8,  x: 0.74, y: 0.55 },
       { id: 9,  x: 0.58, y: 0.72 },
-      { id:10, x: 0.40, y: 0.78 },
-      { id:11, x: 0.55, y: 0.50 },
-      { id:12, x: 0.32, y: 0.55 }
+      { id:10,  x: 0.40, y: 0.78 },
+      { id:11,  x: 0.55, y: 0.50 },
+      { id:12,  x: 0.32, y: 0.55 }
     ];
+
     let points = [];
     let currentTarget = 1;
     let running = false;
     let taskStartTime = 0;
     let lastClickTime = 0;
     let timerInterval = null;
-
     const eventLog = [];
 
     let calibrationStarted = false;
-    let calibrationDone = false;
+    let calibrationDone    = false;
 
-    // ========= פונקציות ציור =========
     function resizePoints() {
       points = basePoints.map(p => ({
-        id: p.id,
-        x: p.x * canvas.width,
-        y: p.y * canvas.height
+        id:p.id,
+        x:p.x*canvas.width,
+        y:p.y*canvas.height
       }));
     }
 
@@ -321,10 +314,10 @@
       ctx.clearRect(0,0,canvas.width,canvas.height);
       ctx.fillStyle = "#020617";
       ctx.fillRect(0,0,canvas.width,canvas.height);
-      for (const p of points) {
+      for (const p of points){
         ctx.beginPath();
-        ctx.arc(p.x, p.y, 16, 0, Math.PI*2);
-        ctx.fillStyle = (p.id === currentTarget && running) ? "#38bdf8" : "#0f172a";
+        ctx.arc(p.x,p.y,16,0,Math.PI*2);
+        ctx.fillStyle = (running && p.id===currentTarget) ? "#38bdf8" : "#0f172a";
         ctx.fill();
         ctx.lineWidth = 2;
         ctx.strokeStyle = "#1e293b";
@@ -334,7 +327,7 @@
         ctx.font = "bold 14px system-ui";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
-        ctx.fillText(String(p.id), p.x, p.y);
+        ctx.fillText(String(p.id),p.x,p.y);
       }
     }
 
@@ -348,44 +341,55 @@
       stopTimer();
       timerEl.textContent = "00:00";
       statusEl.textContent =
-        "תחילה יש לבצע כיול מעקב עיניים (WebGazer), ואז ניתן להתחיל את המשימה.";
+        "ראשית יש לבצע כיול מעקב עיניים, לאחר מכן ניתן להתחיל את המשימה.";
       drawBoard();
     }
 
     function startTimer(){
       stopTimer();
       timerInterval = setInterval(()=>{
-        if (!running) return;
-        const t = Math.floor((performance.now() - taskStartTime)/1000);
+        if(!running) return;
+        const t = Math.floor((performance.now()-taskStartTime)/1000);
         const mm = String(Math.floor(t/60)).padStart(2,"0");
         const ss = String(t%60).padStart(2,"0");
-        timerEl.textContent = mm + ":" + ss;
+        timerEl.textContent = mm+":"+ss;
       },250);
     }
-
     function stopTimer(){
-      if (timerInterval){
+      if(timerInterval){
         clearInterval(timerInterval);
-        timerInterval = null;
+        timerInterval=null;
       }
     }
 
-    // ========= קליברציית WebGazer =========
+    function findClickedPoint(x,y){
+      const radius=20;
+      let best=null, bestDist=Infinity;
+      for(const p of points){
+        const dx=x-p.x, dy=y-p.y;
+        const d=Math.hypot(dx,dy);
+        if(d<radius && d<bestDist){
+          best=p; bestDist=d;
+        }
+      }
+      return best ? {point:best, dist:bestDist} : null;
+    }
+
+    // ===== כיול WebGazer =====
     async function startCalibration(){
-      if (calibrationStarted) return;
       const pid = document.getElementById("pid").value.trim();
-      if (!pid){
-        statusEl.innerHTML =
-          "<span class='err'>נא למלא מזהה נבדק לפני תחילת הכיול.</span>";
+      if(!pid){
+        statusEl.innerHTML = "<span class='err'>נא למלא מזהה נבדק לפני הכיול.</span>";
         return;
       }
 
-      if (!window.webgazer){
+      if(!window.webgazer){
         statusEl.innerHTML =
-          "<span class='err'>WebGazer לא נטען. ניתן לבצע את הניסוי ללא מעקב עיניים.</span>";
+          "<span class='err'>WebGazer לא נטען. ניתן להמשיך את המשימה ללא מעקב עיניים.</span>";
         return;
       }
 
+      if(calibrationStarted) return;
       calibrationStarted = true;
       calibBtn.disabled = true;
       statusEl.textContent = "פותח מצלמה... אנא אשר/י גישה.";
@@ -398,71 +402,53 @@
         await webgazer.begin();
 
         statusEl.textContent =
-          "כיול פעיל: הסתכל/י על פינות המסך ולחץ/י במסך בכמה נקודות שונות. " +
+          "הכיול פעיל. הסתכל/י על פינות המסך ולחץ/י במספר נקודות שונות. " +
           "לאחר מכן לחץ/י על \"סיום כיול\".";
         finishCalibBtn.style.display = "inline-flex";
       }catch(err){
         console.error(err);
         statusEl.innerHTML =
-          "<span class='err'>שגיאה בהפעלת WebGazer. ניתן להמשיך את הניסוי ללא מעקב עיניים.</span>";
+          "<span class='err'>שגיאה בהפעלת WebGazer. אפשר להמשיך בלי מעקב עיניים.</span>";
         calibrationStarted = false;
         calibBtn.disabled = false;
       }
     }
 
     function finishCalibration(){
-      if (!calibrationStarted) return;
+      if(!calibrationStarted) return;
       calibrationDone = true;
       startBtn.disabled = false;
-      finishCalibBtn.style.display = "none";
+      finishCalibBtn.style.display="none";
       statusEl.innerHTML =
-        "<span class='ok'>הכיול הסתיים. ניתן להתחיל את משימת חיבור הנקודות.</span>";
+        "<span class='ok'>הכיול הסתיים. ניתן להתחיל את המשימה.</span>";
 
-      // משאירים את WebGazer רץ (כדי שתוכל בעתיד לקרוא נתוני מבט),
-      // אבל מסתירים את הווידאו והנקודות:
-      if (window.webgazer){
+      if(window.webgazer){
         webgazer.showVideoPreview(false);
         webgazer.showPredictionPoints(false);
       }
     }
 
-    // ========= משימת חיבור נקודות (אותו דבר כמו v2) =========
+    // ===== התחלת המשימה (אחרי כיול) =====
     function startTask(){
-      if (!calibrationDone){
+      if(!calibrationDone){
         statusEl.innerHTML =
-          "<span class='err'>יש לסיים קודם את הכיול (סיום כיול).</span>";
+          "<span class='err'>יש לסיים קודם את הכיול (לחיצה על \"סיום כיול\").</span>";
         return;
       }
       const pid = document.getElementById("pid").value.trim();
-      if (!pid){
+      if(!pid){
         statusEl.innerHTML =
           "<span class='err'>נא למלא מזהה נבדק לפני תחילת המשימה.</span>";
         return;
       }
       running = true;
-      currentTarget = 1;
-      eventLog.length = 0;
-      taskStartTime = performance.now();
-      lastClickTime = taskStartTime;
+      currentTarget=1;
+      eventLog.length=0;
+      taskStartTime=performance.now();
+      lastClickTime=taskStartTime;
+      statusEl.textContent="המשימה החלה. התחיל/י מהמספר 1.";
       startTimer();
-      statusEl.textContent = "המשימה החלה. התחיל/י מהמספר 1.";
       drawBoard();
-    }
-
-    function findClickedPoint(x,y){
-      const radius = 20;
-      let best = null;
-      let bestDist = Infinity;
-      for(const p of points){
-        const dx = x - p.x;
-        const dy = y - p.y;
-        const d = Math.hypot(dx,dy);
-        if(d < radius && d < bestDist){
-          best = p;
-          bestDist = d;
-        }
-      }
-      return best ? {point:best, dist:bestDist} : null;
     }
 
     canvas.addEventListener("click", ev=>{
@@ -470,25 +456,25 @@
       const x = ev.clientX - rect.left;
       const y = ev.clientY - rect.top;
 
-      if (!running){
-        // בזמן כיול – הקליקים עדיין עוזרים ל-WebGazer, לא צריך לעשות כלום.
+      if(!running){
+        // בזמן הכיול – הקליקים משמשים את WebGazer, אין משימה
         return;
       }
 
       const now = performance.now();
-      const rt = now - lastClickTime;
+      const rt  = now - lastClickTime;
       lastClickTime = now;
 
       const hit = findClickedPoint(x,y);
 
-      if (!hit){
+      if(!hit){
         eventLog.push({
           type:"miss",
-          order: currentTarget,
+          order:currentTarget,
           clickX:x,
           clickY:y,
           rtMs:Math.round(rt),
-          timestampMs:Math.round(now - taskStartTime)
+          timestampMs:Math.round(now-taskStartTime)
         });
         statusEl.innerHTML =
           "<span class='err'>לחיצה ריקה – נסה/י שוב על המספר " + currentTarget + ".</span>";
@@ -508,31 +494,31 @@
         pointY:hit.point.y,
         distanceToCenter:Math.round(hit.dist),
         rtMs:Math.round(rt),
-        timestampMs:Math.round(now - taskStartTime)
+        timestampMs:Math.round(now-taskStartTime)
       });
 
-      if (!correct){
+      if(!correct){
         statusEl.innerHTML =
           "<span class='err'>זה לא המספר הנכון. חפש/י את " + currentTarget + ".</span>";
         return;
       }
 
-      if (currentTarget > 1){
+      // מציירים קו בין הנקודה הקודמת לנוכחית
+      if(currentTarget>1){
         const prev = points.find(p=>p.id===currentTarget-1);
         ctx.beginPath();
-        ctx.moveTo(prev.x, prev.y);
-        ctx.lineTo(hit.point.x, hit.point.y);
-        ctx.strokeStyle = "#38bdf8";
-        ctx.lineWidth = 3;
+        ctx.moveTo(prev.x,prev.y);
+        ctx.lineTo(hit.point.x,hit.point.y);
+        ctx.strokeStyle="#38bdf8";
+        ctx.lineWidth=3;
         ctx.stroke();
       }
 
       currentTarget++;
-      if (currentTarget > points.length){
-        // סיום משימה
-        running = false;
+      if(currentTarget>points.length){
+        running=false;
         stopTimer();
-        const totalMs = Math.round(now - taskStartTime);
+        const totalMs = Math.round(now-taskStartTime);
         statusEl.innerHTML =
           "<span class='ok'>המשימה הסתיימה! זמן כולל: " + totalMs + " מילישניות.</span>";
 
@@ -540,34 +526,33 @@
         const condition = document.getElementById("condition").value;
         const order = document.getElementById("order").value;
 
-        sendResultsToDrive(eventLog, {
-          participantId: pid,
+        sendResultsToDrive(eventLog,{
+          participantId:pid,
           condition,
           order,
-          version: "connect_dots_v2_eye_webgazer",
-          totalTimeMs: totalMs,
-          screenW: window.innerWidth,
-          screenH: window.innerHeight
+          version:"connect_dots_v2_eye_webgazer",
+          totalTimeMs:totalMs,
+          screenW:window.innerWidth,
+          screenH:window.innerHeight
         });
         return;
       }
 
-      statusEl.textContent = "מצוין. עכשיו לחפש את " + currentTarget + ".";
+      statusEl.textContent="מצוין. עכשיו לחפש את " + currentTarget + ".";
       drawBoard();
     });
 
-    // ניקוי WebGazer כשסוגרים את הדף
-    window.addEventListener("beforeunload", () => {
-      if (window.webgazer){
+    window.addEventListener("beforeunload",()=>{
+      if(window.webgazer){
         webgazer.end();
       }
     });
 
-    // אתחול ראשוני
+    // אתחול
     resetTask();
-    calibBtn.addEventListener("click", startCalibration);
-    finishCalibBtn.addEventListener("click", finishCalibration);
-    startBtn.addEventListener("click", startTask);
+    calibBtn.addEventListener("click",startCalibration);
+    finishCalibBtn.addEventListener("click",finishCalibration);
+    startBtn.addEventListener("click",startTask);
   </script>
 </body>
 </html>
