@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>משימת חיבור נקודות – ניסוי קשב</title>
+  <title>משימת חיבור נקודות – ניסוי קשב (עם מעקב עיניים)</title>
 
-  <!-- WebGazer למעקב עיניים -->
+  <!-- WebGazer -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js" type="text/javascript"></script>
 
   <style>
@@ -196,9 +196,9 @@
     margin: 30
   };
 
-  // ======================= שליחה ל-Google Drive (JSON) =======================
+  // ======================= שליחה ל-Google Drive =======================
   const DRIVE_WEBAPP_URL =
-    "https://script.google.com/macros/s/AKfycbyVXVWJBJix8aL1CvN1kLsz_QJu_pp8fQK8I6gDr2y2a-RtTiccE324alm0QyY2Sq6Lg/exec";
+    "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324alm0QyY2Sq6Lg/exec";
 
   function sendCsvToDrive(csvContent, prefix, safePid){
     if (!csvContent) return;
@@ -574,17 +574,8 @@
     };
   }
 
-  // ======================= טיימר =======================
-  function tick(){
-    if (!running) return;
-    const elapsedSec = (now() - sessionStart) / 1000;
-    if (elapsedSec >= CONFIG.sessionMinutes * 60){
-      endSession(true);
-    }
-  }
-
   // ======================= CSV =======================
-  function buildTasksCsv(){
+  function buildCsvTasks(){
     if(!tasks.length) return "";
     const head=["pid","task","n_points","errors","duration_ms","completed","ts"];
     const rows=tasks.map(t=>[
@@ -593,7 +584,7 @@
     return head.join(",")+"\n"+rows.join("\n");
   }
 
-  function buildGazeCsv(){
+  function buildCsvGaze(){
     if(!gazeSamples.length) return "";
     const head=["t_ms_session","has_gaze","x_px","y_px","in_viewport"];
     const rows=gazeSamples.map(s=>[
@@ -647,46 +638,47 @@
   }
 
   function endSession(autoEnded){
-    if(sessionEnded){ 
-      redirectToForm(); 
-      return; 
+    if(sessionEnded){
+      redirectToForm();
+      return;
     }
-    sessionEnded=true;
-    running=false;
+    sessionEnded = true;
+    running = false;
     if(tickId) clearInterval(tickId);
-    startBtn.disabled=false;
-    endBtn.disabled=true;
+    startBtn.disabled = false;
+    endBtn.disabled   = true;
 
     if(currentTask) logTask(false);
 
-    const pid=(pidInput.value||"").trim();
-    const safePid=(pid||"PID").replace(/[^a-zA-Z0-9_-]/g,"");
+    const pid     = (pidInput.value || "").trim();
+    const safePid = (pid || "PID").replace(/[^a-zA-Z0-9_-]/g,"");
 
-    // שליחת קובץ המשימות ל-Drive
-    const tasksCsv = buildTasksCsv();
-    if(tasksCsv){
+    const tasksCsv = buildCsvTasks();
+    if (tasksCsv){
       sendCsvToDrive(tasksCsv, "connect_the_dots_tasks", safePid);
     }
 
-    // שליחת קובץ מעקב העיניים ל-Drive
-    const gazeCsv = buildGazeCsv();
-    if(gazeCsv){
+    const gazeCsv = buildCsvGaze();
+    if (gazeCsv){
       sendCsvToDrive(gazeCsv, "connect_the_dots_gaze", safePid);
     }
 
-    overlayTitle.textContent=autoEnded?"הסשן הסתיים":"הסשן הופסק";
-    overlayText.textContent="תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
-    overlayContinue.textContent="המשך לשאלון";
-    overlay.style.display="grid";
-    overlayContinue.onclick=()=>{overlay.style.display="none";redirectToForm();};
+    overlayTitle.textContent    = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
+    overlayText.textContent     = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
+    overlayContinue.textContent = "המשך לשאלון";
+    overlay.style.display       = "grid";
+    overlayContinue.onclick     = () => {
+      overlay.style.display = "none";
+      redirectToForm();
+    };
   }
 
   // ======================= כיול מעקב עיניים =======================
   function showCalibPoint(){
-    const pt = CALIB_POINTS[calibIndex];
-    calibDot.style.left = (pt.x * 100) + "%";
-    calibDot.style.top  = (pt.y * 100) + "%";
-    calibText.textContent =
+    const pt=CALIB_POINTS[calibIndex];
+    calibDot.style.left=(pt.x*100)+"%";
+    calibDot.style.top =(pt.y*100)+"%";
+    calibText.textContent=
       `הסתכל/י על הנקודה ולחץ/י עליה (${calibIndex+1}/${CALIB_POINTS.length})`;
   }
 
