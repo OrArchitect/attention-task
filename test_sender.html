@@ -1,50 +1,117 @@
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8">
+  <meta charset="utf-8" />
   <title>בדיקת שליחת CSV ל-Drive</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont,
+                   "Segoe UI", Arial, sans-serif;
+      margin: 2rem;
+      background: #ffffff;
+      color: #111827;
+    }
+    h1 {
+      margin-top: 0;
+      font-size: 1.8rem;
+    }
+    label {
+      display: block;
+      margin: 1rem 0 0.5rem;
+      font-weight: 600;
+    }
+    textarea {
+      width: 100%;
+      min-height: 150px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
+                   Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.9rem;
+      padding: 0.5rem;
+      box-sizing: border-box;
+    }
+    button {
+      margin-top: 1rem;
+      padding: 0.6rem 1.4rem;
+      border: none;
+      border-radius: 999px;
+      font-size: 1rem;
+      cursor: pointer;
+      background: #111827;
+      color: #f9fafb;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    #status {
+      margin-top: 1rem;
+      padding: 0.7rem 1rem;
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+      white-space: pre-wrap;
+      direction: ltr; /* שיהיה קל לקרוא שגיאות */
+      font-size: 0.9rem;
+    }
+  </style>
 </head>
 <body>
-  <h1>בדיקת שליחת CSV ל-Drive</h1>
-  <p>לחץ על הכפתור כדי לשלוח קובץ בדיקה ל-Google Drive דרך ה-Apps Script.</p>
-  <button id="sendBtn">שלח קובץ בדיקה</button>
+  <h1>בדיקת שליחת CSV ל-Google Drive</h1>
+  <p>
+    הדבק כאן נתוני CSV או השתמש בדוגמה, ואז לחץ על הכפתור
+    כדי לשלוח ל-Apps Script ששומר את הקובץ ב-Drive.
+  </p>
 
-  <pre id="log" style="margin-top:1rem; background:#eee; padding:0.5rem;"></pre>
+  <label for="csvInput">תוכן ה-CSV:</label>
+  <textarea id="csvInput">
+id,name,score
+1,Or,95
+2,Test,88
+  </textarea>
 
-<script>
-const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbz8Zz3a69cFYJ9PYVtfPF5lUIYFWz1XFS7myrZl3n-qP1KTXW70VjSrbS4j_MG8WjTrRQ/exec";
+  <button id="sendBtn" onclick="sendCsv()">שליחת CSV ל-Drive</button>
 
-function log(msg){
-  const pre = document.getElementById('log');
-  pre.textContent += msg + "\n";
-}
+  <div id="status"></div>
 
-document.getElementById('sendBtn').onclick = () => {
-  const payload = {
-    pid: "TEST_MANUAL",
-    variant: "test",
-    tasksCsv: "pid,task,value\nTEST_MANUAL,1,123",
-    summaryCsv: "pid,total\nTEST_MANUAL,1",
-    gazeCsv: ""
-  };
+  <script>
+    // ה-URL החדש של ה-Apps Script שלך
+    const SCRIPT_URL =
+      "https://script.google.com/macros/s/AKfycbzBR6TE4lF2guDcOK0vl9hJoayNLgGSRmGxZ3tZbqBp8vSCtYTD2SrLDZ_flZxYzKETsA/exec";
 
-  log("שולח בקשה ל-Apps Script...");
-  fetch(SCRIPT_URL, {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    body: JSON.stringify(payload)
-  })
-  .then(r => r.text())
-  .then(t => {
-    log("תגובה מהשרת:");
-    log(t);
-  })
-  .catch(err => {
-    log("שגיאה:");
-    log(String(err));
-    console.error(err);
-  });
-};
-</script>
+    async function sendCsv() {
+      const statusEl = document.getElementById("status");
+      const btn = document.getElementById("sendBtn");
+      const csv = document.getElementById("csvInput").value;
+
+      statusEl.textContent = "שולח בקשה ל-Apps Script...";
+      btn.disabled = true;
+
+      try {
+        const response = await fetch(SCRIPT_URL, {
+          method: "POST",
+          headers: {
+            // כותרת פשוטה כדי להימנע מבעיות CORS
+            "Content-Type": "text/plain;charset=utf-8"
+          },
+          body: csv
+        });
+
+        const text = await response.text();
+
+        if (!response.ok) {
+          statusEl.textContent =
+            "שגיאה בתשובה מהשרת:\n" +
+            response.status + " " + response.statusText + "\n\n" +
+            text;
+        } else {
+          statusEl.textContent = "הבקשה הצליחה.\nתשובת השרת: " + text;
+        }
+      } catch (err) {
+        statusEl.textContent =
+          "שגיאה ברשת (Failed to fetch?):\n" + err.message;
+      } finally {
+        btn.disabled = false;
+      }
+    }
+  </script>
 </body>
 </html>
