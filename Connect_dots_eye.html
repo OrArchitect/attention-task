@@ -168,7 +168,8 @@
     <!-- שכבת נקודת הכיול -->
     <div id="calibOverlay">
       <div id="calibDot"></div>
-      <div id="calibText">הסתכל/י על הנקודה ולחץ/י עליה (1/9)</div>
+      <!-- עדכון ל-12 נקודות -->
+      <div id="calibText">הסתכל/י על הנקודה ולחץ/י עליה (1/12)</div>
     </div>
 
     <div id="overlay">
@@ -195,6 +196,10 @@
     lineAvoidDistance: 16,
     margin: 30
   };
+
+  // ---- כתובת Apps Script לשמירת CSV ב-Drive ----
+  const DRIVE_WEBAPP_URL =
+    "https://script.google.com/macros/s/AKfycbz8Zz3a69cFYJ9PYVtfPF5lUIYFWz1XFS7myrZl3n-qP1KTXW70VjSrbS4j_MG8WjTrRQ/exec";
 
   // ---- Form 2 (summary) ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
@@ -251,20 +256,23 @@
   // Calibration
   let calibrationStarted = false;
   let calibrationDone    = false;
+
+  // 12 נקודות כיול על פני המסך
   const CALIB_POINTS = [
-    {x:0.1, y:0.1},
-    {x:0.5, y:0.1},
-    {x:0.9, y:0.1},
-    {x:0.1, y:0.5},
-    {x:0.5, y:0.5},
-    {x:0.9, y:0.5},
-    {x:0.1, y:0.9},
-    {x:0.5, y:0.9},
-    {x:0.9, y:0.9}
+    {x:0.10, y:0.15},
+    {x:0.40, y:0.15},
+    {x:0.70, y:0.15},
+    {x:0.90, y:0.15},
+    {x:0.10, y:0.50},
+    {x:0.40, y:0.50},
+    {x:0.70, y:0.50},
+    {x:0.90, y:0.50},
+    {x:0.10, y:0.85},
+    {x:0.40, y:0.85},
+    {x:0.70, y:0.85},
+    {x:0.90, y:0.85}
   ];
   let calibIndex = 0;
-  let calibStartTime = 0;
-  const CALIB_MAX_MS = 20000;
 
   // Gaze log
   const gazeSamples = [];
@@ -470,7 +478,7 @@
     p.set(LOG_ENTRY_PID,row.pid);
     p.set(LOG_ENTRY_TASK,String(row.task));
     p.set(LOG_ENTRY_N_POINTS,String(row.n_points));
-    p.set(LOG_ENTRY_ERRORS,String(row.errors));
+    p.set(LOG_ENTRY_ERRORS(String(row.errors)));
     p.set(LOG_ENTRY_DURATION,String(row.duration_ms));
     p.set(LOG_ENTRY_COMPLETED,String(row.completed));
     p.set(LOG_ENTRY_TIMESTAMP,row.ts);
@@ -551,15 +559,23 @@
     return head.join(",")+"\n"+rows.join("\n");
   }
 
-  function downloadCsv(content,filename){
+  // שליחה ל-Drive במקום הורדה למחשב
+  async function uploadCsvToDrive(content, filename){
     if(!content) return;
-    const blob=new Blob([content],{type:"text/csv"});
-    const a=document.createElement("a");
-    a.href=URL.createObjectURL(blob);
-    a.download=filename;
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},0);
+    try{
+      await fetch(DRIVE_WEBAPP_URL, {
+        method: "POST",
+        mode: "no-cors",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          filename: filename,
+          mimeType: "text/csv",
+          content: content
+        })
+      });
+    }catch(err){
+      console.error("Drive upload failed", err);
+    }
   }
 
   function buildFormSummary(){
@@ -607,10 +623,14 @@
     const safePid=(pid||"PID").replace(/[^a-zA-Z0-9_-]/g,"");
 
     const tasksCsv=buildCsvTasks();
-    if(tasksCsv) downloadCsv(tasksCsv,"connect_the_dots_results_"+safePid+".csv");
+    if(tasksCsv){
+      uploadCsvToDrive(tasksCsv, "connect_the_dots_results_"+safePid+".csv");
+    }
 
     const gazeCsv=buildCsvGaze();
-    if(gazeCsv) downloadCsv(gazeCsv,"connect_the_dots_gaze_"+safePid+".csv");
+    if(gazeCsv){
+      uploadCsvToDrive(gazeCsv, "connect_the_dots_gaze_"+safePid+".csv");
+    }
 
     overlayTitle.textContent=autoEnded?"הסשן הסתיים":"הסשן הופסק";
     overlayText.textContent="תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
@@ -630,17 +650,14 @@
 
   function startCalibrationSequence(){
     calibIndex=0;
-    calibStartTime=performance.now();
     calibOverlay.style.display="grid";
     showCalibPoint();
   }
 
   function handleCalibClick(){
     calibIndex++;
-    const elapsed=performance.now()-calibStartTime;
-    const finishedByCount=calibIndex>=CALIB_POINTS.length;
-    const finishedByTime =elapsed>=CALIB_MAX_MS;
-    if(finishedByCount || finishedByTime){
+    const finishedByCount = calibIndex >= CALIB_POINTS.length;
+    if(finishedByCount){
       finishCalibrationSequence();
     }else{
       showCalibPoint();
@@ -666,8 +683,9 @@
     try{
       await webgazer.setRegression('ridge');
       await webgazer.setTracker('clmtrackr');
-      webgazer.params.showVideoPreview=true;
-      webgazer.params.showPredictionPoints=true;
+      // לא מציגים תצוגת וידאו של המצלמה
+      webgazer.params.showVideoPreview = false;
+      webgazer.params.showPredictionPoints = true;
       await webgazer.begin();
       startCalibrationSequence();
     }catch(err){
@@ -687,6 +705,7 @@
     pidInput.disabled=false;
     startBtn.disabled=false;
     if(window.webgazer){
+      // ווידאו לא מוצג מלכתחילה, שומרים על כיבוי
       webgazer.showVideoPreview(false);
       webgazer.showPredictionPoints(false);
     }
