@@ -151,6 +151,10 @@
     margin: 30
   };
 
+  // ---- כתובת ה-Web App של Apps Script (שלך) ----
+  const SCRIPT_URL =
+    "https://script.google.com/macros/s/AKfycbz8Zz3a69cFYJ9PYVtfPF5lUIYFWz1XFS7myrZl3n-qP1KTXW70VjSrbS4j_MG8WjTrRQ/exec";
+
   // ---- טופס 2: טופס הסיכום (כבר קיים) ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
 
@@ -170,13 +174,6 @@
     "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse";
 
   // מזהי השדות מטופס 3:
-  // Test  → entry.152946855
-  // 1     → entry.781109584
-  // 12    → entry.347168050
-  // 0     → entry.1932703164
-  // 10000 → entry.1227866932
-  // 1     → entry.1100470565
-  // 2025-01-01T12:00:00Z → entry.1243807469
   const LOG_ENTRY_PID        = "entry.152946855";
   const LOG_ENTRY_TASK       = "entry.781109584";
   const LOG_ENTRY_N_POINTS   = "entry.347168050";
@@ -307,7 +304,7 @@
       points: generatePoints(n),
       selected: new Set(),
       selectionOrder: [],
-      errors: 0,        // כמות ניסיונות כושלים במשימה זו (רצף מלא לא נכון)
+      errors: 0,
       startTime: now()
     };
     draw();
@@ -383,7 +380,7 @@
     const n = task.points.length;
     if (order.length !== n) return false;
     for (let i=0;i<n;i++){
-      if (order[i] !== i) return false; // ציפייה: 0,1,2,...,n-1
+      if (order[i] !== i) return false;
     }
     return true;
   }
@@ -410,24 +407,20 @@
     const selected = task.selected;
 
     if (selected.has(idx)){
-      // הסרת בחירה – מסירים גם מהסדר
       selected.delete(idx);
       task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
       draw();
       return;
     }
 
-    // בחירה חדשה
     selected.add(idx);
     task.selectionOrder.push(idx);
     draw();
 
-    // אם נבחרו *כל* המספרים – בודקים האם הסדר מושלם
     if (task.selectionOrder.length === task.points.length){
       if (isPerfectSequence(task)){
         completeCurrentTask();
       } else {
-        // ניסיון כושל: העלאת מונה הטעויות ואיפוס המשימה
         task.errors += 1;
         resetAttempt(task);
       }
@@ -448,7 +441,6 @@
     params.set(LOG_ENTRY_COMPLETED, String(row.completed));
     params.set(LOG_ENTRY_TIMESTAMP, row.ts);
 
-    // שליחה כ-POST ל-formResponse (x-www-form-urlencoded)
     fetch(LOG_FORM_BASE, {
       method: "POST",
       mode: "no-cors",
@@ -506,7 +498,8 @@
     }
   }
 
-  function buildCsv(){
+  // ======================= בניית CSV ל-דרייב =======================
+  function buildTasksCsv(){
     if (!tasks.length) return "";
     const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
     const rows = tasks.map(t =>
@@ -515,23 +508,6 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  function downloadCsv(pid){
-    const csv = buildCsv();
-    if (!csv) return;
-    const blob = new Blob([csv], {type:"text/csv"});
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    const safePid = (pid || "PID").replace(/[^a-zA-Z0-9_-]/g,"");
-    a.download = "connect_the_dots_results_" + safePid + ".csv";
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      URL.revokeObjectURL(a.href);
-      a.remove();
-    }, 0);
-  }
-
-  // ======== בניית המידע שנשלח לטופס 2 ========
   function buildFormSummary(){
     const completedTasks = tasks.filter(t => t.completed === 1);
     const totalTasksCompleted = completedTasks.length;
@@ -555,6 +531,55 @@
     };
   }
 
+  function buildSummaryCsv(pid){
+    const s = buildFormSummary();
+    const head = [
+      "pid",
+      "total_tasks",
+      "points_per_task",
+      "errors_per_task",
+      "duration_per_task",
+      "experiment_time"
+    ];
+    const row = [
+      pid || "",
+      s.totalTasksCompleted,
+      `"${s.pointsPerTask}"`,
+      `"${s.errorsPerTask}"`,
+      `"${s.durPerTask}"`,
+      s.experimentTime || ""
+    ];
+    return head.join(",") + "\n" + row.join(",");
+  }
+
+  function buildGazeCsv(pid){
+    // בגרסה ללא מעקב עיניים – אין נתוני מבט
+    return "";
+  }
+
+  function sendCsvToDrive(pid, variant){
+    const tasksCsv   = buildTasksCsv();
+    const summaryCsv = buildSummaryCsv(pid);
+    const gazeCsv    = buildGazeCsv(pid); // כאן תמיד ריק
+
+    const payload = {
+      pid: pid || "",
+      variant: variant || "noeye",
+      tasksCsv,
+      summaryCsv,
+      gazeCsv
+    };
+
+    fetch(SCRIPT_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch(err => {
+      console.error("Error sending CSV to Drive:", err);
+    });
+  }
+
+  // ======== שליחת סיכום לטופס הסיכום (Google Forms) ========
   function redirectToForm(){
     const pid = (pidInput.value || "").trim();
     const summary = buildFormSummary();
@@ -587,9 +612,8 @@
     }
 
     const pid = (pidInput.value || "").trim();
-    if (tasks.length){
-      downloadCsv(pid);
-    }
+    // שליחה ל-Google Drive
+    sendCsvToDrive(pid, "noeye");
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
     overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
