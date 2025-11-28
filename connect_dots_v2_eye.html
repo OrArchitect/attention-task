@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>משימת חיבור נקודות – ניסוי קשב (עם מעקב עיניים)</title>
 
-  <!-- NEW: ספריית WebGazer למעקב עיניים -->
+  <!-- ספריית WebGazer למעקב עיניים -->
   <script src="https://webgazer.cs.brown.edu/webgazer.js" type="text/javascript"></script>
 
   <style>
@@ -111,6 +111,34 @@
       margin-bottom:8px;
     }
     .muted{color:var(--muted);}
+
+    /* שכבת כיול מעקב עיניים */
+    #calibOverlay{
+      position:absolute;
+      inset:10px 16px 16px;
+      display:none;
+      place-items:center;
+      background:rgba(15,23,42,0.75);
+      border-radius:18px;
+      pointer-events:auto;
+    }
+    #calibDot{
+      position:absolute;
+      width:22px;
+      height:22px;
+      border-radius:999px;
+      background:#f97373;
+      box-shadow:0 0 12px rgba(248,113,113,0.9);
+      cursor:pointer;
+    }
+    #calibText{
+      position:absolute;
+      bottom:24px;
+      width:100%;
+      text-align:center;
+      color:var(--ink);
+      font-size:0.9rem;
+    }
   </style>
 </head>
 <body>
@@ -123,11 +151,12 @@
         <label for="pid">מזהה נבדק:</label>
         <input id="pid" type="text" placeholder="לדוגמה OR010125" />
 
-        <!-- NEW: כפתורי כיול -->
+        <!-- כפתורי הכיול -->
         <button id="calibBtn">כיול מעקב עיניים</button>
         <button id="finishCalibBtn" disabled>סיום כיול</button>
 
-        <button id="startBtn" disabled>התחל סשן</button> <!-- NEW: בהתחלה מושבת -->
+        <!-- התחלת סשן תהיה זמינה רק אחרי כיול -->
+        <button id="startBtn" disabled>התחל סשן</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
       </div>
     </div>
@@ -135,6 +164,13 @@
 
   <div id="stageWrap">
     <canvas id="stage"></canvas>
+
+    <!-- שכבת כיול עם נקודה נעה -->
+    <div id="calibOverlay">
+      <div id="calibDot"></div>
+      <div id="calibText">הסתכל/י על הנקודה ולחץ/י עליה (1/9)</div>
+    </div>
+
     <div id="overlay">
       <div class="box">
         <h2 id="overlayTitle">סיום הסשן</h2>
@@ -194,8 +230,12 @@
   const overlayText = document.getElementById("overlayText");
   const overlayContinue = document.getElementById("overlayContinue");
 
-  const calibBtn = document.getElementById("calibBtn");          // NEW
-  const finishCalibBtn = document.getElementById("finishCalibBtn"); // NEW
+  const calibBtn = document.getElementById("calibBtn");
+  const finishCalibBtn = document.getElementById("finishCalibBtn");
+
+  const calibOverlay = document.getElementById("calibOverlay");
+  const calibDot = document.getElementById("calibDot");
+  const calibText = document.getElementById("calibText");
 
   // ======================= STATE =======================
   let running = false;
@@ -209,9 +249,30 @@
   let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
-  // NEW: מצב כיול
+  // מצב כיול
   let calibrationStarted = false;
   let calibrationDone    = false;
+
+  // נקודות כיול (Normalized 0..1)
+  const CALIB_POINTS = [
+    {x:0.1, y:0.1},
+    {x:0.5, y:0.1},
+    {x:0.9, y:0.1},
+    {x:0.1, y:0.5},
+    {x:0.5, y:0.5},
+    {x:0.9, y:0.5},
+    {x:0.1, y:0.9},
+    {x:0.5, y:0.9},
+    {x:0.9, y:0.9}
+  ];
+  let calibIndex = 0;
+  let calibStartTime = 0;
+  const CALIB_MAX_MS = 20000; // כ-20 שניות
+
+  // לוג מבט
+  const gazeSamples = [];
+  let lastGazeSampleTime = 0;
+  const GAZE_SAMPLE_INTERVAL = 50; // ms
 
   // ======================= פונקציות עזר =======================
   function getPidFromUrl(){
@@ -436,7 +497,7 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
-  // ======================= טופס 3 (לוג משימות) =======================
+  // ======================= לוג טופס 3 =======================
   function sendTaskToLogForm(row){
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
@@ -506,7 +567,7 @@
     }
   }
 
-  function buildCsv(){
+  function buildCsvTasks(){
     if (!tasks.length) return "";
     const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
     const rows = tasks.map(t =>
@@ -515,14 +576,33 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  function downloadCsv(pid){
-    const csv = buildCsv();
-    if (!csv) return;
-    const blob = new Blob([csv], {type:"text/csv"});
+  function buildCsvGaze(){
+    if (!gazeSamples.length) return "";
+    const head = [
+      "t_ms_session",
+      "has_gaze",
+      "x_px",
+      "y_px",
+      "in_viewport"
+    ];
+    const rows = gazeSamples.map(s =>
+      [
+        s.t_ms,
+        s.hasGaze ? 1 : 0,
+        s.hasGaze ? Math.round(s.x) : "",
+        s.hasGaze ? Math.round(s.y) : "",
+        s.inViewport ? 1 : 0
+      ].join(",")
+    );
+    return head.join(",") + "\n" + rows.join("\n");
+  }
+
+  function downloadCsv(content, filename){
+    if (!content) return;
+    const blob = new Blob([content], {type:"text/csv"});
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    const safePid = (pid || "PID").replace(/[^a-zA-Z0-9_-]/g,"");
-    a.download = "connect_the_dots_results_" + safePid + ".csv";
+    a.download = filename;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => {
@@ -586,8 +666,17 @@
     }
 
     const pid = (pidInput.value || "").trim();
-    if (tasks.length){
-      downloadCsv(pid);
+    const safePid = (pid || "PID").replace(/[^a-zA-Z0-9_-]/g,"");
+
+    // הורדת קובצי CSV
+    const tasksCsv = buildCsvTasks();
+    if (tasksCsv){
+      downloadCsv(tasksCsv, "connect_the_dots_results_" + safePid + ".csv");
+    }
+
+    const gazeCsv = buildCsvGaze();
+    if (gazeCsv){
+      downloadCsv(gazeCsv, "connect_the_dots_gaze_" + safePid + ".csv");
     }
 
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
@@ -601,7 +690,41 @@
     };
   }
 
-  // ======================= כיול מעקב עיניים (NEW) =======================
+  // ======================= כיול מעקב עיניים =======================
+  function showCalibPoint(){
+    const pt = CALIB_POINTS[calibIndex];
+    calibDot.style.left = (pt.x * 100) + "%";
+    calibDot.style.top  = (pt.y * 100) + "%";
+    calibText.textContent =
+      `הסתכל/י על הנקודה ולחץ/י עליה (${calibIndex+1}/${CALIB_POINTS.length})`;
+  }
+
+  function startCalibrationSequence(){
+    calibIndex = 0;
+    calibStartTime = performance.now();
+    calibOverlay.style.display = "grid";
+    showCalibPoint();
+  }
+
+  function handleCalibClick(){
+    // WebGazer כבר משתמש בקליק זה כחלק מהכיול
+    calibIndex++;
+    const elapsed = performance.now() - calibStartTime;
+    const finishedByCount = calibIndex >= CALIB_POINTS.length;
+    const finishedByTime  = elapsed >= CALIB_MAX_MS;
+
+    if (finishedByCount || finishedByTime){
+      finishCalibrationSequence();
+    } else {
+      showCalibPoint();
+    }
+  }
+
+  function finishCalibrationSequence(){
+    calibOverlay.style.display = "none";
+    finishCalibration();
+  }
+
   async function startCalibration(){
     if (!window.webgazer){
       alert("WebGazer לא נטען. ניתן לבצע את המשימה גם בלי מעקב עיניים.");
@@ -620,22 +743,24 @@
       webgazer.params.showPredictionPoints = true;
       await webgazer.begin();
 
-      alert("הכיול התחיל. הסתכל/י על אזורים שונים במסך ולחצי/לחץ מעט על נקודות.\nכשתסיים/י – לחץ/י על \"סיום כיול\".");
+      startCalibrationSequence();
     }catch(err){
       console.error(err);
       alert("שגיאה בהפעלת WebGazer. אפשר להמשיך את המשימה בלי מעקב עיניים.");
       calibrationStarted = false;
       calibBtn.disabled = false;
       finishCalibBtn.disabled = true;
+      calibOverlay.style.display = "none";
     }
   }
 
   function finishCalibration(){
     if (!calibrationStarted) return;
+
     calibrationDone = true;
     finishCalibBtn.disabled = true;
-    pidInput.disabled = false;   // אפשר עכשיו להזין PID
-    startBtn.disabled = false;   // ואפשר עקרונית להתחיל סשן
+    pidInput.disabled = false;
+    startBtn.disabled = false;
 
     if (window.webgazer){
       webgazer.showVideoPreview(false);
@@ -643,9 +768,10 @@
     }
 
     alert("כיול הסתיים. כעת ניתן להזין מזהה נבדק ולהתחיל את הסשן.");
+    calibOverlay.style.display = "none";
   }
 
-  // ======================= תחילת סשן (עם בדיקת כיול) =======================
+  // ======================= תחילת סשן =======================
   function startSession(){
     if (!calibrationDone){
       alert("נא לבצע קודם כיול מעקב עיניים (\"כיול מעקב עיניים\" ואז \"סיום כיול\").");
@@ -670,6 +796,9 @@
     startBtn.disabled = true;
     endBtn.disabled = false;
 
+    gazeSamples.length = 0;
+    lastGazeSampleTime = 0;
+
     openNewTask(CONFIG.initialPoints);
 
     if (tickId) clearInterval(tickId);
@@ -680,6 +809,44 @@
     endSession(false);
   }
 
+  // ======================= לוג מבט מ-WebGazer =======================
+  function setupGazeListener(){
+    if (!window.webgazer) return;
+
+    webgazer.setGazeListener((data, elapsedTime) => {
+      if (!running || !sessionStart) return;
+
+      const tSession = now() - sessionStart;
+      if (tSession - lastGazeSampleTime < GAZE_SAMPLE_INTERVAL) return;
+      lastGazeSampleTime = tSession;
+
+      if (!data){
+        gazeSamples.push({
+          t_ms: Math.round(tSession),
+          hasGaze: false,
+          x: null,
+          y: null,
+          inViewport: false
+        });
+        return;
+      }
+
+      const x = data.x;
+      const y = data.y;
+      const inViewport =
+        x >= 0 && x <= window.innerWidth &&
+        y >= 0 && y <= window.innerHeight;
+
+      gazeSamples.push({
+        t_ms: Math.round(tSession),
+        hasGaze: true,
+        x,
+        y,
+        inViewport
+      });
+    });
+  }
+
   // ======================= Init =======================
   const urlPid = getPidFromUrl();
   if (urlPid){
@@ -687,7 +854,7 @@
     pidInput.readOnly = true;
   }
 
-  // NEW: בהתחלה אסור לכתוב PID לפני כיול
+  // בתחילה PID חסום עד סיום כיול
   pidInput.disabled = true;
 
   window.addEventListener("resize", resizeCanvas);
@@ -698,11 +865,16 @@
   calibBtn.addEventListener("click", startCalibration);
   finishCalibBtn.addEventListener("click", finishCalibration);
 
+  calibDot.addEventListener("click", handleCalibClick);
+
   window.addEventListener("beforeunload", () => {
     if (window.webgazer){
       webgazer.end();
     }
   });
+
+  // הגדרת ליסנר מבט (כשנטען)
+  setupGazeListener();
 })();
 </script>
 </body>
