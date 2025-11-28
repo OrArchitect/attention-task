@@ -196,47 +196,48 @@
     margin: 30
   };
 
-  // ======================= שליחה ל-Google Drive (כמו בגרסה הרגילה) =======================
-const SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324almOqYy2Sq6Lg/exec";
-  function sendCsvToDrive(csvContent, label) {
+  // ======================= שליחה ל-Google Drive =======================
+  const DRIVE_WEBAPP_URL =
+    "https://script.google.com/macros/s/AKfycbyVXMVVJBJix8aL1CvN1kLsz_QJu_pp8fQK8l6gDr2y2a-RtTiccE324alm0QyY2Sq6Lg/exec";
+
+  function sendCsvToDrive(csvContent, prefix){
     if (!csvContent) return;
 
     const rawPid = (pidInput.value || "PID").trim();
     const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
     const ts = new Date().toISOString().replace(/[:.]/g, "");
 
-    const header = `# ${label} | pid=${safePid} | ts=${ts}\n`;
-    const body = header + csvContent;
+    const filename = `${prefix}_${safePid}_${ts}.csv`;
 
-    fetch(SCRIPT_URL, {
+    fetch(DRIVE_WEBAPP_URL, {
       method: "POST",
       mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        filename,
+        mimeType: "text/csv",
+        content: csvContent
+      }),
     }).catch(err => {
-      console.error("Failed to send CSV to Drive:", err);
+      console.error("Drive upload failed", err);
     });
   }
 
-  // ---- טופס 2: טופס הסיכום ----
+  // ---- Form 2 (summary) ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
-
   const ENTRY_PID             = "entry.404955311";
   const ENTRY_TOTAL_TASKS     = "entry.1331557537";
   const ENTRY_POINTS_PER_TASK = "entry.742152065";
   const ENTRY_ERRORS_PER_TASK = "entry.1634677467";
   const ENTRY_DUR_PER_TASK    = "entry.529234118";
   const ENTRY_EXPERIMENT_TIME = "entry.883845532";
-
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
 
-  // ---- טופס 3: לוג המשימות ----
+  // ---- Form 3 (log per task) ----
   const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
   const LOG_FORM_BASE =
     "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
-
   const LOG_ENTRY_PID        = "entry.152946855";
   const LOG_ENTRY_TASK       = "entry.781109584";
   const LOG_ENTRY_N_POINTS   = "entry.347168050";
@@ -278,7 +279,6 @@ const SCRIPT_URL =
   let calibrationStarted = false;
   let calibrationDone    = false;
 
-  // 12 נקודות כיול – יחסיות למסך
   const CALIB_POINTS = [
     {x:0.10,y:0.15},
     {x:0.30,y:0.15},
@@ -295,17 +295,15 @@ const SCRIPT_URL =
   ];
   let calibIndex = 0;
 
-  // איסוף דגימות מבט
   const gazeSamples = [];
   let lastGazeSampleTime = 0;
-  const GAZE_SAMPLE_INTERVAL = 50; // מ״ש בין דגימות
+  const GAZE_SAMPLE_INTERVAL = 50;
 
-  // ======================= פונקציות עזר =======================
+  // ======================= Helpers =======================
   function getPidFromUrl(){
     const params = new URLSearchParams(window.location.search);
     return params.get("pid") || "";
   }
-
   function now(){ return performance.now(); }
 
   function resizeCanvas(){
@@ -336,7 +334,7 @@ const SCRIPT_URL =
     return Math.hypot(p.x-projX, p.y-projY);
   }
 
-  // ======================= יצירת משימה =======================
+  // ======================= משימה =======================
   function generatePoints(n){
     const rect = canvas.getBoundingClientRect();
     const m = CONFIG.margin;
@@ -533,7 +531,7 @@ const SCRIPT_URL =
     if (navigator.sendBeacon){
       navigator.sendBeacon(url);
     } else {
-      fetch(url, { method:"GET", mode:"no-cors" }).catch(()=>{});
+      fetch(url,{method:"GET",mode:"no-cors"}).catch(()=>{});
     }
   }
 
@@ -578,7 +576,7 @@ const SCRIPT_URL =
     };
   }
 
-  // ======================= טיימר סשן =======================
+  // ======================= טיימר =======================
   function tick(){
     if (!running) return;
     const elapsedSec = (now() - sessionStart) / 1000;
@@ -587,32 +585,40 @@ const SCRIPT_URL =
     }
   }
 
-  // ======================= CSV משימות + CSV מבט =======================
-  function buildTasksCsv(){
-    if (!tasks.length) return "";
-    const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
-    const rows = tasks.map(t =>
-      [t.pid, t.task, t.n_points, t.errors, t.duration_ms, t.completed, t.ts].join(",")
-    );
-    return head.join(",") + "\n" + rows.join("\n");
+  // ======================= CSV =======================
+  function buildCsvTasks(){
+    if(!tasks.length) return "";
+    const head=["pid","task","n_points","errors","duration_ms","completed","ts"];
+    const rows=tasks.map(t=>[
+      t.pid,t.task,t.n_points,t.errors,t.duration_ms,t.completed,t.ts
+    ].join(","));
+    return head.join(",")+"\n"+rows.join("\n");
   }
 
-  function buildGazeCsv(){
-    if (!gazeSamples.length) return "";
-    const head = ["t_ms_session","has_gaze","x_px","y_px","in_viewport"];
-    const rows = gazeSamples.map(s =>
-      [
-        s.t_ms,
-        s.hasGaze ? 1 : 0,
-        s.hasGaze ? Math.round(s.x) : "",
-        s.hasGaze ? Math.round(s.y) : "",
-        s.inViewport ? 1 : 0
-      ].join(",")
-    );
-    return head.join(",") + "\n" + rows.join("\n");
+  function buildCsvGaze(){
+    if(!gazeSamples.length) return "";
+    const head=["t_ms_session","has_gaze","x_px","y_px","in_viewport"];
+    const rows=gazeSamples.map(s=>[
+      s.t_ms,
+      s.hasGaze?1:0,
+      s.hasGaze?Math.round(s.x):"",
+      s.hasGaze?Math.round(s.y):"",
+      s.inViewport?1:0
+    ].join(","));
+    return head.join(",")+"\n"+rows.join("\n");
   }
 
-  // ======== נתוני סיכום לטופס 2 ========
+  function downloadCsv(content,filename){
+    if(!content) return;
+    const blob=new Blob([content],{type:"text/csv"});
+    const a=document.createElement("a");
+    a.href=URL.createObjectURL(blob);
+    a.download=filename;
+    document.body.appendChild(a);
+    a.click();
+  }
+
+  // ======================= סיכום לטופס 2 =======================
   function buildFormSummary(){
     const completedTasks = tasks.filter(t => t.completed === 1);
     const totalTasksCompleted = completedTasks.length;
@@ -653,40 +659,35 @@ const SCRIPT_URL =
   }
 
   function endSession(autoEnded){
-    if (sessionEnded) {
-      redirectToForm();
-      return;
-    }
-    sessionEnded = true;
-    running = false;
-    if (tickId) clearInterval(tickId);
-    startBtn.disabled = false;
-    endBtn.disabled = true;
+    if(sessionEnded){ redirectToForm(); return; }
+    sessionEnded=true;
+    running=false;
+    if(tickId) clearInterval(tickId);
+    startBtn.disabled=false;
+    endBtn.disabled=true;
 
-    if (currentTask){
-      logTask(false);
-    }
+    if(currentTask) logTask(false);
 
-    // שליחת שני קבצי CSV ל-Drive — בדיוק כמו בגרסה הרגילה
-    const tasksCsv = buildTasksCsv();
-    if (tasksCsv){
+    const pid=(pidInput.value||"").trim();
+    const safePid=(pid||"PID").replace(/[^a-zA-Z0-9_-]/g,"");
+
+    const tasksCsv=buildCsvTasks();
+    if(tasksCsv){
+      downloadCsv(tasksCsv,"connect_the_dots_results_"+safePid+".csv");
       sendCsvToDrive(tasksCsv, "connect_the_dots_tasks");
     }
 
-    const gazeCsv = buildGazeCsv();
-    if (gazeCsv){
+    const gazeCsv=buildCsvGaze();
+    if(gazeCsv){
+      downloadCsv(gazeCsv,"connect_the_dots_gaze_"+safePid+".csv");
       sendCsvToDrive(gazeCsv, "connect_the_dots_gaze");
     }
 
-    overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
-    overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
-    overlayContinue.textContent = "המשך לשאלון";
-    overlay.style.display = "grid";
-
-    overlayContinue.onclick = () => {
-      overlay.style.display = "none";
-      redirectToForm();
-    };
+    overlayTitle.textContent=autoEnded?"הסשן הסתיים":"הסשן הופסק";
+    overlayText.textContent="תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
+    overlayContinue.textContent="המשך לשאלון";
+    overlay.style.display="grid";
+    overlayContinue.onclick=()=>{overlay.style.display="none";redirectToForm();}
   }
 
   // ======================= כיול מעקב עיניים =======================
@@ -761,7 +762,6 @@ const SCRIPT_URL =
     }
   }
 
-  // ======================= סשן =======================
   function startSession(){
     if (!calibrationDone){
       alert("נא לבצע קודם כיול מעקב עיניים (12 נקודות).");
