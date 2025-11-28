@@ -152,7 +152,6 @@
   };
 
   // ======================= שליחה ל-Google Drive =======================
-  // URL של ה-Web App מה-Apps Script שלך
   const SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbybO1_akQMKOO4TkATG62fJDOFWo1fwJQdmyQ_bZaIXm6Go29DcvGypYUHBJ-NW-CEQ/exec";
 
@@ -163,7 +162,6 @@
     const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
     const ts = new Date().toISOString().replace(/[:.]/g, "");
 
-    // שורת מטא־דאטה כדי שתוכל לזהות בתיקייה
     const header = `# ${label} | pid=${safePid} | ts=${ts}\n`;
     const body = header + csvContent;
 
@@ -177,7 +175,7 @@
     });
   }
 
-  // ---- טופס 2: טופס הסיכום (כבר קיים) ----
+  // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
 
   const ENTRY_PID             = "entry.404955311";
@@ -190,12 +188,11 @@
   const FORM_BASE_URL =
     "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
 
-  // ---- טופס 3: לוג המשימות (הקישור ששלחת) ----
+  // ---- טופס 3: לוג המשימות ----
   const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
   const LOG_FORM_BASE =
     "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
 
-  // מזהי השדות מטופס 3 (לפי ה-prefill ששלחת):
   const LOG_ENTRY_PID        = "entry.152946855";
   const LOG_ENTRY_TASK       = "entry.781109584";
   const LOG_ENTRY_N_POINTS   = "entry.347168050";
@@ -251,7 +248,7 @@
   }
 
   function distance(a,b){
-    return Math.hypot(a.x - a.x, a.y - a.y);
+    return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
   function pointToSegmentDistance(p,a,b){
@@ -326,7 +323,7 @@
       points: generatePoints(n),
       selected: new Set(),
       selectionOrder: [],
-      errors: 0,        // כמות ניסיונות כושלים במשימה זו (רצף מלא לא נכון)
+      errors: 0,
       startTime: now()
     };
     draw();
@@ -402,7 +399,7 @@
     const n = task.points.length;
     if (order.length !== n) return false;
     for (let i=0;i<n;i++){
-      if (order[i] !== i) return false; // ציפייה: 0,1,2,...,n-1
+      if (order[i] !== i) return false;
     }
     return true;
   }
@@ -429,24 +426,20 @@
     const selected = task.selected;
 
     if (selected.has(idx)){
-      // הסרת בחירה – מסירים גם מהסדר
       selected.delete(idx);
       task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
       draw();
       return;
     }
 
-    // בחירה חדשה
     selected.add(idx);
     task.selectionOrder.push(idx);
     draw();
 
-    // אם נבחרו *כל* המספרים – בודקים האם הסדר מושלם
     if (task.selectionOrder.length === task.points.length){
       if (isPerfectSequence(task)){
         completeCurrentTask();
       } else {
-        // ניסיון כושל: העלאת מונה הטעויות ואיפוס המשימה
         task.errors += 1;
         resetAttempt(task);
       }
@@ -577,7 +570,6 @@
 
   function endSession(autoEnded){
     if (sessionEnded) {
-      // אם כבר סיימנו – רק נעבור לשאלון
       redirectToForm();
       return;
     }
@@ -587,14 +579,12 @@
     startBtn.disabled = false;
     endBtn.disabled = true;
 
-    // אם יש משימה פתוחה – נרשום כלוג "לא הושלם"
     if (currentTask){
       logTask(false);
     }
 
     const csv = buildCsv();
     if (csv) {
-      // שולחים ל-Google Drive
       sendCsvToDrive(csv, "connect_the_dots_tasks");
     }
 
