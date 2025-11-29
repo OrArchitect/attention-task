@@ -156,37 +156,40 @@
   };
 
   // ======================= שליחה ל-Google Drive =======================
-  const SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbzREgZWRcXYl4WffB5zudQTgyW7dboUlNIelTxofWULeVvCax5pMp5rNz-YT6GDluW5PA/exec";
-  
-  function sendCsvToDrive(csvContent, label) {
-    console.log("sendCsvToDrive called. label =", label,
-                "length =", csvContent && csvContent.length);
-    if (!csvContent) return;
+const SCRIPT_URL =
+  "https://script.google.com/macros/s/AKfycBzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0IcBnd0NHsx5rdhRnRA/exec";
 
-    const rawPid  = (pidInput.value || "PID").trim();
-    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
-    const ts      = new Date().toISOString().replace(/[:.]/g, "");
+function sendCsvToDrive(csvContent, label) {
+  if (!csvContent) return;
 
-    // שם קובץ מסודר לפי נבדק וסוג הקובץ
-    const filename = `${safePid}_${label}_${ts}.csv`;
+  // PID מתוך השדה (או מתוך ה-URL אם השדה נעול)
+  const rawPid = (pidInput.value || "").trim();
+  // ניקוי תווים בעייתיים בשם קובץ
+  const safePid = rawPid
+    ? rawPid.replace(/[^a-zA-Z0-9_-]/g, "")
+    : "PID";
 
-    // פורמט JSON ש-doPost מצפה לו
-    const payload = {
-      filename: filename,
-      mimeType: "text/csv",
-      content:  csvContent
-    };
+  // חותמת זמן קומפקטית לשם הקובץ
+  const ts = new Date().toISOString().replace(/[:.]/g, "");
 
-    fetch(SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).catch(err => {
-      console.error("Failed to send CSV to Drive:", err);
-    });
-  }
+  // שם הקובץ הסופי – כולל PID
+  const filename = `${safePid}_${label}_${ts}.csv`;
+
+  const payload = {
+    filename: filename,
+    mimeType: "text/csv",
+    content: csvContent
+  };
+
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }).catch(err => {
+    console.error("Failed to send CSV to Drive:", err);
+  });
+}
 
   // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
