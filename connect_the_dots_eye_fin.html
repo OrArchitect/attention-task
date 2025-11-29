@@ -557,22 +557,52 @@
     draw();
   }
 
-  // ======================= כיול – נקודות אדומות =======================
-  function generateCalibrationPoints(count){
-    const rect = canvas.getBoundingClientRect();
-    const m = CONFIG.margin;
-    const W = Math.max(rect.width - 2*m, 220);
-    const H = Math.max(rect.height - 2*m, 220);
-    const pts = [];
+// ======================= כיול – נקודות אדומות =======================
+// נקודות קבועות: פינות, אמצעי צלעות, מרכז, טבעת פנימית ועוד 2 נקודות אלכסון
+function generateCalibrationPoints(count){
+  const rect = canvas.getBoundingClientRect();
+  const m = CONFIG.margin;
+  const W = Math.max(rect.width - 2*m, 220);
+  const H = Math.max(rect.height - 2*m, 220);
 
-    for (let i=0;i<count;i++){
-      pts.push({
-        x: randomBetween(m, m+W),
-        y: randomBetween(m, m+H)
-      });
-    }
-    return pts;
+  // נקודות מנורמלות (0–1) ביחס לאזור הכיול
+  const pattern = [
+    // פינות
+    [0.05, 0.05],
+    [0.95, 0.05],
+    [0.95, 0.95],
+    [0.05, 0.95],
+
+    // אמצעי צלעות
+    [0.50, 0.05],
+    [0.95, 0.50],
+    [0.50, 0.95],
+    [0.05, 0.50],
+
+    // מרכז
+    [0.50, 0.50],
+
+    // טבעת פנימית (ריבוע פנימי)
+    [0.33, 0.33],
+    [0.67, 0.33],
+    [0.67, 0.67],
+    [0.33, 0.67],
+
+    // שתי נקודות אלכסון להשלמת 15
+    [0.25, 0.75],
+    [0.75, 0.25]
+  ];
+
+  const pts = [];
+  for (let i = 0; i < count; i++) {
+    const [nx, ny] = pattern[i % pattern.length]; // ליתר ביטחון אם count ≠ 15
+    pts.push({
+      x: m + nx * W,
+      y: m + ny * H
+    });
   }
+  return pts;
+}
 
   function startCalibrationSequence(){
     calibrationPoints = generateCalibrationPoints(CALIB_POINTS_TOTAL);
