@@ -155,28 +155,36 @@
     margin: 30
   };
 
-  // ======================= שליחה ל-Google Drive =======================
-  const SCRIPT_URL =
+// ======================= שליחה ל-Google Drive =======================
+const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycBzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0IcBnd0NHsx5rdhRnRA/exec";
-  function sendCsvToDrive(csvContent, label) {
-    if (!csvContent) return;
 
-    const rawPid = (pidInput.value || "PID").trim();
-    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
-    const ts = new Date().toISOString().replace(/[:.]/g, "");
+function sendCsvToDrive(csvContent, label) {
+  if (!csvContent) return;
 
-    const header = `# ${label} | pid=${safePid} | ts=${ts}\n`;
-    const body = header + csvContent;
+  const rawPid  = (pidInput.value || "PID").trim();
+  const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
+  const ts      = new Date().toISOString().replace(/[:.]/g, "");
 
-    fetch(SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body
-    }).catch(err => {
-      console.error("Failed to send CSV to Drive:", err);
-    });
-  }
+  // שם קובץ מסודר לפי סוג הקובץ
+  const filename = `${label}_${safePid}_${ts}.csv`;
+
+  // פורמט JSON ש-doPost מצפה לו
+  const payload = {
+    filename: filename,
+    mimeType: "text/csv",
+    content:  csvContent
+  };
+
+  fetch(SCRIPT_URL, {
+    method: "POST",
+    mode: "no-cors",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }).catch(err => {
+    console.error("Failed to send CSV to Drive:", err);
+  });
+}
 
   // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
