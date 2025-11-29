@@ -160,7 +160,11 @@ const SCRIPT_URL =
   "https://script.google.com/macros/s/AKfycBzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0IcBnd0NHsx5rdhRnRA/exec";
 
 function sendCsvToDrive(csvContent, label) {
+  console.log("sendCsvToDrive called. label =", label,
+              "length =", csvContent && csvContent.length);
   if (!csvContent) return;
+  ...
+}
 
   const rawPid  = (pidInput.value || "PID").trim();
   const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
@@ -849,38 +853,60 @@ function sendCsvToDrive(csvContent, label) {
     window.location.href = target;
   }
 
-  function endSession(autoEnded){
-    if (sessionEnded) {
-      redirectToForm();
-      return;
-    }
-    sessionEnded = true;
-    running = false;
-    if (tickId) clearInterval(tickId);
-    startBtn.disabled = false;
-    endBtn.disabled = true;
+function endSession(autoEnded){
+  console.log("endSession called. autoEnded =", autoEnded);
 
-    if (currentTask){
-      logTask(false);
-    }
+  if (sessionEnded) {
+    console.log("sessionEnded already true -> redirectToForm only");
+    redirectToForm();
+    return;
+  }
+  sessionEnded = true;
+  running = false;
+  if (tickId) clearInterval(tickId);
+  startBtn.disabled = false;
+  endBtn.disabled = true;
 
-    // קובץ תוצאות המשימה
-    const csv = buildCsv();
-    if (csv) {
-      sendCsvToDrive(csv, "connect_the_dots_tasks");
-    }
+  if (currentTask){
+    console.log("Logging unfinished currentTask before end");
+    logTask(false);
+  }
 
-    // קובץ סיכום מעקב עיניים
-    const eyeCsv = buildEyeCsv();
-    if (eyeCsv){
-      sendCsvToDrive(eyeCsv, "webgazer_eye_tracking");
-    }
+  // קובץ תוצאות המשימה
+  const csv = buildCsv();
+  console.log("CSV built. length =", csv.length);
+  if (csv) {
+    console.log("Calling sendCsvToDrive for connect_the_dots_tasks");
+    sendCsvToDrive(csv, "connect_the_dots_tasks");
+  } else {
+    console.log("No CSV content – nothing to send");
+  }
 
-    // לסגור מצלמה
-    if (window.webgazer){
-      try { webgazer.end(); } catch(e){}
-    }
+  // קובץ סיכום מעקב עיניים
+  const eyeCsv = buildEyeCsv();
+  console.log("Eye CSV built. length =", eyeCsv.length);
+  if (eyeCsv){
+    console.log("Calling sendCsvToDrive for webgazer_eye_tracking");
+    sendCsvToDrive(eyeCsv, "webgazer_eye_tracking");
+  } else {
+    console.log("No eye CSV content – nothing to send");
+  }
 
+  // לסגור מצלמה
+  if (window.webgazer){
+    try { webgazer.end(); } catch(e){}
+  }
+
+  overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
+  overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
+  overlayContinue.textContent = "המשך לשאלון";
+  overlay.style.display = "grid";
+
+  overlayContinue.onclick = () => {
+    overlay.style.display = "none";
+    redirectToForm();
+  };
+}
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
     overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
     overlayContinue.textContent = "המשך לשאלון";
