@@ -168,7 +168,7 @@
     const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
     const ts      = new Date().toISOString().replace(/[:.]/g, "");
 
-    // שם הקובץ – קודם PID ואז סוג הקובץ
+    // שם קובץ מסודר לפי נבדק וסוג הקובץ
     const filename = `${safePid}_${label}_${ts}.csv`;
 
     // פורמט JSON ש-doPost מצפה לו
@@ -244,7 +244,7 @@
   let calibrationPoints = [];
   let calibrationIndex = 0;
 
-  // סטטיסטיקות + דגימות מעקב עיניים
+  // סטטיסטיקות מעקב עיניים בזמן המשימה
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
@@ -261,10 +261,7 @@
     offRightEvents: 0
   };
 
-  // דגימות גולמיות לכל פרק זמן
-  let gazeSamples = [];
-  // כיוון “יציאה” נוכחי (כשאין נתונים)
-  let currentOffDir = "";
+  const gazeTimeline = [];
 
   function resetGazeStats(){
     gazeStats.hasStarted = false;
@@ -280,9 +277,7 @@
     gazeStats.offEvents = 0;
     gazeStats.offLeftEvents = 0;
     gazeStats.offRightEvents = 0;
-
-    gazeSamples = [];
-    currentOffDir = "";
+    gazeTimeline.length = 0;
   }
 
   // מאזין של WebGazer – נאסף רק בזמן המשימה
@@ -325,19 +320,17 @@
     if (hadData) gazeStats.validSamples++;
     else gazeStats.invalidSamples++;
 
-    // זיהוי “יציאה” חדשה מהמחשב + כיוון
+    // זיהוי "יציאה" חדשה מהמחשב
     if (!hadData && gazeStats.lastHadData){
       gazeStats.offEvents++;
       if (gazeStats.lastX != null){
         const w = window.innerWidth || document.documentElement.clientWidth || 1;
-        const side = gazeStats.lastX < w/2 ? "L" : "R";
-        if (side === "L") gazeStats.offLeftEvents++;
-        else gazeStats.offRightEvents++;
-        currentOffDir = side;
+        if (gazeStats.lastX < w/2){
+          gazeStats.offLeftEvents++;
+        } else {
+          gazeStats.offRightEvents++;
+        }
       }
-    } else if (hadData && !gazeStats.lastHadData){
-      // חזרה למסך – מאפסים כיוון יציאה נוכחי
-      currentOffDir = "";
     }
 
     gazeStats.lastHadData = hadData;
@@ -346,43 +339,88 @@
       gazeStats.lastY = data.y;
     }
 
-    // דגימה גולמית לטבלה
-    const sample = {
-      task: currentTask ? currentTask.index : 0,
-      t_ms: Math.round(t),
-      x: hadData && data ? Math.round(data.x) : "",
-      y: hadData && data ? Math.round(data.y) : "",
-      on_screen: hadData ? 1 : 0,
-      off_dir: hadData ? "" : currentOffDir
-    };
-    gazeSamples.push(sample);
+    // לוג מפורט של כל דגימת מבט
+    const ms = Math.round(t);
+    const taskIndex = currentTask ? currentTask.index : 0;
+    let x = "";
+    let y = "";
+    let dir = "";
+
+    if (hadData){
+      x = Math.round(data.x);
+      y = Math.round(data.y);
+    } else if (gazeStats.lastX != null){
+      const w = window.innerWidth || document.documentElement.clientWidth || 1;
+      dir = (gazeStats.lastX < w/2) ? "L" : "R";
+    }
+
+    gazeTimeline.push({
+      ms,
+      task: taskIndex,
+      x,
+      y,
+      on: hadData ? 1 : 0,
+      dir
+    });
   }
 
   function buildEyeCsv(){
     const pid = (pidInput.value || "").trim();
-    if (!gazeSamples.length){
+    if (!gazeStats.hasStarted && gazeStats.totalSamples === 0){
+      // לא נאספו נתונים
       return "";
     }
     const head = [
       "pid",
-      "task",
-      "t_ms",
+      "total_on_ms",
+      "total_off_ms",
+      "total_samples",
+      "valid_samples",
+      "invalid_samples",
+      "off_events",
+      "off_left_events",
+      "off_right_events"
+    ];
+    const row = [
+      pid,
+      Math.round(gazeStats.totalOnMs),
+      Math.round(gazeStats.totalOffMs),
+      gazeStats.totalSamples,
+      gazeStats.validSamples,
+      gazeStats.invalidSamples,
+      gazeStats.offEvents,
+      gazeStats.offLeftEvents,
+      gazeStats.offRightEvents
+    ].join(",");
+    return head.join(",") + "\n" + row + "\n";
+  }
+
+  function buildEyeTimelineCsv(){
+    const pid = (pidInput.value || "").trim();
+    if (!gazeTimeline.length){
+      return "";
+    }
+    const head = [
+      "pid",
+      "task_index",
+      "ms",
       "x",
       "y",
       "on_screen",
-      "off_dir"
+      "off_direction"
     ];
-    const rows = gazeSamples.map(s => [
-      pid,
-      s.task,
-      s.t_ms,
-      s.x,
-      s.y,
-      s.on_screen,
-      s.off_dir
-    ].join(","));
-    // שורה 1 – כותרות, שורה לכל דגימה
-    return head.join(",") + "\r\n" + rows.join("\r\n") + "\r\n";
+    const rows = gazeTimeline.map(sample =>
+      [
+        pid,
+        sample.task,
+        sample.ms,
+        sample.x,
+        sample.y,
+        sample.on,
+        sample.dir
+      ].join(",")
+    );
+    return head.join(",") + "\n" + rows.join("\n");
   }
 
   // התחלת WebGazer + מעבר לרצף כיול הנקודות
@@ -825,8 +863,7 @@
     const rows = tasks.map(t =>
       [t.pid, t.task, t.n_points, t.errors, t.duration_ms, t.completed, t.ts].join(",")
     );
-    // שורה 1 – כותרות, שורה 2..n – שורה לכל משימה
-    return head.join(",") + "\r\n" + rows.join("\r\n") + "\r\n";
+    return head.join(",") + "\n" + rows.join("\n");
   }
 
   // ======== בניית המידע שנשלח לטופס 2 ========
@@ -898,14 +935,24 @@
       console.log("No CSV content – nothing to send");
     }
 
-    // קובץ סיכום מעקב עיניים – עכשיו דגימות גולמיות
+    // קובץ סיכום מעקב עיניים (שורה אחת לסשן)
     const eyeCsv = buildEyeCsv();
     console.log("Eye CSV built. length =", eyeCsv.length);
     if (eyeCsv){
-      console.log("Calling sendCsvToDrive for webgazer_eye_tracking");
-      sendCsvToDrive(eyeCsv, "webgazer_eye_tracking");
+      console.log("Calling sendCsvToDrive for webgazer_eye_summary");
+      sendCsvToDrive(eyeCsv, "webgazer_eye_summary");
     } else {
-      console.log("No eye CSV content – nothing to send");
+      console.log("No eye CSV content – nothing to send (summary)");
+    }
+
+    // קובץ מפורט – דגימה לכל רגע בזמן
+    const eyeTimelineCsv = buildEyeTimelineCsv();
+    console.log("Eye timeline CSV length =", eyeTimelineCsv.length);
+    if (eyeTimelineCsv){
+      console.log("Calling sendCsvToDrive for webgazer_eye_timeline");
+      sendCsvToDrive(eyeTimelineCsv, "webgazer_eye_timeline");
+    } else {
+      console.log("No eye timeline content – nothing to send");
     }
 
     // לסגור מצלמה
