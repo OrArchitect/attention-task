@@ -155,39 +155,38 @@
     margin: 30
   };
 
-// ======================= שליחה ל-Google Drive =======================
-const SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycBzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0IcBnd0NHsx5rdhRnRA/exec";
+  // ======================= שליחה ל-Google Drive =======================
+  const SCRIPT_URL =
+    "https://script.google.com/macros/s/AKfycBzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0IcBnd0NHsx5rdhRnRA/exec";
 
-function sendCsvToDrive(csvContent, label) {
-  console.log("sendCsvToDrive called. label =", label,
-              "length =", csvContent && csvContent.length);
-  if (!csvContent) return;
-}
+  function sendCsvToDrive(csvContent, label) {
+    console.log("sendCsvToDrive called. label =", label,
+                "length =", csvContent && csvContent.length);
+    if (!csvContent) return;
 
-  const rawPid  = (pidInput.value || "PID").trim();
-  const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
-  const ts      = new Date().toISOString().replace(/[:.]/g, "");
+    const rawPid  = (pidInput.value || "PID").trim();
+    const safePid = rawPid.replace(/[^a-zA-Z0-9_-]/g, "") || "PID";
+    const ts      = new Date().toISOString().replace(/[:.]/g, "");
 
-  // שם קובץ מסודר לפי סוג הקובץ
-  const filename = `${label}_${safePid}_${ts}.csv`;
+    // שם קובץ מסודר לפי סוג הקובץ
+    const filename = `${label}_${safePid}_${ts}.csv`;
 
-  // פורמט JSON ש-doPost מצפה לו
-  const payload = {
-    filename: filename,
-    mimeType: "text/csv",
-    content:  csvContent
-  };
+    // פורמט JSON ש-doPost מצפה לו
+    const payload = {
+      filename: filename,
+      mimeType: "text/csv",
+      content:  csvContent
+    };
 
-  fetch(SCRIPT_URL, {
-    method: "POST",
-    mode: "no-cors",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  }).catch(err => {
-    console.error("Failed to send CSV to Drive:", err);
-  });
-}
+    fetch(SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch(err => {
+      console.error("Failed to send CSV to Drive:", err);
+    });
+  }
 
   // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
@@ -419,10 +418,6 @@ function sendCsvToDrive(csvContent, label) {
 
   function randomBetween(min,max){
     return min + Math.random() * (max - min);
-  }
-
-  function distance(a,b){
-    return Math.hypot(a.x - b.x, a.y - b.y);
   }
 
   function pointToSegmentDistance(p,a,b){
@@ -852,60 +847,50 @@ function sendCsvToDrive(csvContent, label) {
     window.location.href = target;
   }
 
-function endSession(autoEnded){
-  console.log("endSession called. autoEnded =", autoEnded);
+  function endSession(autoEnded){
+    console.log("endSession called. autoEnded =", autoEnded);
 
-  if (sessionEnded) {
-    console.log("sessionEnded already true -> redirectToForm only");
-    redirectToForm();
-    return;
-  }
-  sessionEnded = true;
-  running = false;
-  if (tickId) clearInterval(tickId);
-  startBtn.disabled = false;
-  endBtn.disabled = true;
+    if (sessionEnded) {
+      console.log("sessionEnded already true -> redirectToForm only");
+      redirectToForm();
+      return;
+    }
+    sessionEnded = true;
+    running = false;
+    if (tickId) clearInterval(tickId);
+    startBtn.disabled = false;
+    endBtn.disabled = true;
 
-  if (currentTask){
-    console.log("Logging unfinished currentTask before end");
-    logTask(false);
-  }
+    if (currentTask){
+      console.log("Logging unfinished currentTask before end");
+      logTask(false);
+    }
 
-  // קובץ תוצאות המשימה
-  const csv = buildCsv();
-  console.log("CSV built. length =", csv.length);
-  if (csv) {
-    console.log("Calling sendCsvToDrive for connect_the_dots_tasks");
-    sendCsvToDrive(csv, "connect_the_dots_tasks");
-  } else {
-    console.log("No CSV content – nothing to send");
-  }
+    // קובץ תוצאות המשימה
+    const csv = buildCsv();
+    console.log("CSV built. length =", csv.length);
+    if (csv) {
+      console.log("Calling sendCsvToDrive for connect_the_dots_tasks");
+      sendCsvToDrive(csv, "connect_the_dots_tasks");
+    } else {
+      console.log("No CSV content – nothing to send");
+    }
 
-  // קובץ סיכום מעקב עיניים
-  const eyeCsv = buildEyeCsv();
-  console.log("Eye CSV built. length =", eyeCsv.length);
-  if (eyeCsv){
-    console.log("Calling sendCsvToDrive for webgazer_eye_tracking");
-    sendCsvToDrive(eyeCsv, "webgazer_eye_tracking");
-  } else {
-    console.log("No eye CSV content – nothing to send");
-  }
+    // קובץ סיכום מעקב עיניים
+    const eyeCsv = buildEyeCsv();
+    console.log("Eye CSV built. length =", eyeCsv.length);
+    if (eyeCsv){
+      console.log("Calling sendCsvToDrive for webgazer_eye_tracking");
+      sendCsvToDrive(eyeCsv, "webgazer_eye_tracking");
+    } else {
+      console.log("No eye CSV content – nothing to send");
+    }
 
-  // לסגור מצלמה
-  if (window.webgazer){
-    try { webgazer.end(); } catch(e){}
-  }
+    // לסגור מצלמה
+    if (window.webgazer){
+      try { webgazer.end(); } catch(e){}
+    }
 
-  overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
-  overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
-  overlayContinue.textContent = "המשך לשאלון";
-  overlay.style.display = "grid";
-
-  overlayContinue.onclick = () => {
-    overlay.style.display = "none";
-    redirectToForm();
-  };
-}
     overlayTitle.textContent = autoEnded ? "הסשן הסתיים" : "הסשן הופסק";
     overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
     overlayContinue.textContent = "המשך לשאלון";
