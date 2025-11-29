@@ -122,7 +122,7 @@
       <div class="controls">
         <label for="pid">מזהה נבדק:</label>
         <input id="pid" type="text" placeholder="לדוגמה OR010125" />
-        <button id="startBtn" disabled>התחל סשן</button>
+        <button id="startBtn" disabled>התחל משימה</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
       </div>
     </div>
@@ -156,40 +156,40 @@
   };
 
   // ======================= שליחה ל-Google Drive =======================
-const SCRIPT_URL =
-  "https://script.google.com/macros/s/AKfycbzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0lcBndONHsx5rdhRnRA/exec";
+  const SCRIPT_URL =
+    "https://script.google.com/macros/s/AKfycbzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0lcBndONHsx5rdhRnRA/exec";
 
-function sendCsvToDrive(csvContent, label) {
-  if (!csvContent) return;
+  function sendCsvToDrive(csvContent, label) {
+    if (!csvContent) return;
 
-  // PID מתוך השדה (או מתוך ה-URL אם השדה נעול)
-  const rawPid = (pidInput.value || "").trim();
-  // ניקוי תווים בעייתיים בשם קובץ
-  const safePid = rawPid
-    ? rawPid.replace(/[^a-zA-Z0-9_-]/g, "")
-    : "PID";
+    // PID מתוך השדה (או מתוך ה-URL אם השדה נעול)
+    const rawPid = (pidInput.value || "").trim();
+    // ניקוי תווים בעייתיים בשם קובץ
+    const safePid = rawPid
+      ? rawPid.replace(/[^a-zA-Z0-9_-]/g, "")
+      : "PID";
 
-  // חותמת זמן קומפקטית לשם הקובץ
-  const ts = new Date().toISOString().replace(/[:.]/g, "");
+    // חותמת זמן קומפקטית לשם הקובץ
+    const ts = new Date().toISOString().replace(/[:.]/g, "");
 
-  // שם הקובץ הסופי – כולל PID
-  const filename = `${safePid}_${label}_${ts}.csv`;
+    // שם הקובץ הסופי – כולל PID
+    const filename = `${safePid}_${label}_${ts}.csv`;
 
-  const payload = {
-    filename: filename,
-    mimeType: "text/csv",
-    content: csvContent
-  };
+    const payload = {
+      filename: filename,
+      mimeType: "text/csv",
+      content: csvContent
+    };
 
-  fetch(SCRIPT_URL, {
-    method: "POST",
-    mode: "no-cors",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  }).catch(err => {
-    console.error("Failed to send CSV to Drive:", err);
-  });
-}
+    fetch(SCRIPT_URL, {
+      method: "POST",
+      mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).catch(err => {
+      console.error("Failed to send CSV to Drive:", err);
+    });
+  }
 
   // ---- טופס 2: טופס הסיכום ----
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
@@ -261,7 +261,9 @@ function sendCsvToDrive(csvContent, label) {
     invalidSamples: 0,
     offEvents: 0,
     offLeftEvents: 0,
-    offRightEvents: 0
+    offRightEvents: 0,
+    offUpEvents: 0,
+    offDownEvents: 0
   };
 
   const gazeTimeline = [];
@@ -280,6 +282,8 @@ function sendCsvToDrive(csvContent, label) {
     gazeStats.offEvents = 0;
     gazeStats.offLeftEvents = 0;
     gazeStats.offRightEvents = 0;
+    gazeStats.offUpEvents = 0;
+    gazeStats.offDownEvents = 0;
     gazeTimeline.length = 0;
   }
 
@@ -323,15 +327,23 @@ function sendCsvToDrive(csvContent, label) {
     if (hadData) gazeStats.validSamples++;
     else gazeStats.invalidSamples++;
 
-    // זיהוי "יציאה" חדשה מהמחשב
+    // זיהוי "יציאה" חדשה מהמחשב + כיוון (L/R/U/D)
     if (!hadData && gazeStats.lastHadData){
       gazeStats.offEvents++;
-      if (gazeStats.lastX != null){
-        const w = window.innerWidth || document.documentElement.clientWidth || 1;
-        if (gazeStats.lastX < w/2){
-          gazeStats.offLeftEvents++;
+      if (gazeStats.lastX != null && gazeStats.lastY != null){
+        const w = window.innerWidth  || document.documentElement.clientWidth  || 1;
+        const h = window.innerHeight || document.documentElement.clientHeight || 1;
+        const cx = w / 2;
+        const cy = h / 2;
+        const dx = gazeStats.lastX - cx;
+        const dy = gazeStats.lastY - cy;
+
+        if (Math.abs(dx) >= Math.abs(dy)){
+          if (dx < 0) gazeStats.offLeftEvents++;
+          else        gazeStats.offRightEvents++;
         } else {
-          gazeStats.offRightEvents++;
+          if (dy < 0) gazeStats.offUpEvents++;
+          else        gazeStats.offDownEvents++;
         }
       }
     }
@@ -352,9 +364,19 @@ function sendCsvToDrive(csvContent, label) {
     if (hadData){
       x = Math.round(data.x);
       y = Math.round(data.y);
-    } else if (gazeStats.lastX != null){
-      const w = window.innerWidth || document.documentElement.clientWidth || 1;
-      dir = (gazeStats.lastX < w/2) ? "L" : "R";
+    } else if (gazeStats.lastX != null && gazeStats.lastY != null){
+      const w = window.innerWidth  || document.documentElement.clientWidth  || 1;
+      const h = window.innerHeight || document.documentElement.clientHeight || 1;
+      const cx = w / 2;
+      const cy = h / 2;
+      const dx = gazeStats.lastX - cx;
+      const dy = gazeStats.lastY - cy;
+
+      if (Math.abs(dx) >= Math.abs(dy)){
+        dir = (dx < 0) ? "L" : "R";
+      } else {
+        dir = (dy < 0) ? "U" : "D";
+      }
     }
 
     gazeTimeline.push({
@@ -382,7 +404,9 @@ function sendCsvToDrive(csvContent, label) {
       "invalid_samples",
       "off_events",
       "off_left_events",
-      "off_right_events"
+      "off_right_events",
+      "off_up_events",
+      "off_down_events"
     ];
     const row = [
       pid,
@@ -393,7 +417,9 @@ function sendCsvToDrive(csvContent, label) {
       gazeStats.invalidSamples,
       gazeStats.offEvents,
       gazeStats.offLeftEvents,
-      gazeStats.offRightEvents
+      gazeStats.offRightEvents,
+      gazeStats.offUpEvents,
+      gazeStats.offDownEvents
     ].join(",");
     return head.join(",") + "\n" + row + "\n";
   }
@@ -560,52 +586,51 @@ function sendCsvToDrive(csvContent, label) {
     draw();
   }
 
-// ======================= כיול – נקודות אדומות =======================
-// נקודות קבועות: פינות, אמצעי צלעות, מרכז, טבעת פנימית ועוד 2 נקודות אלכסון
-function generateCalibrationPoints(count){
-  const rect = canvas.getBoundingClientRect();
-  const m = CONFIG.margin;
-  const W = Math.max(rect.width - 2*m, 220);
-  const H = Math.max(rect.height - 2*m, 220);
+  // ======================= כיול – נקודות אדומות =======================
+  function generateCalibrationPoints(count){
+    const rect = canvas.getBoundingClientRect();
+    const m = CONFIG.margin;
+    const W = Math.max(rect.width - 2*m, 220);
+    const H = Math.max(rect.height - 2*m, 220);
 
-  // נקודות מנורמלות (0–1) ביחס לאזור הכיול
-  const pattern = [
-    // פינות
-    [0.05, 0.05],
-    [0.95, 0.05],
-    [0.95, 0.95],
-    [0.05, 0.95],
+    // נקודות מנורמלות (0–1) ביחס לאזור הכיול
+    const pattern = [
+      // פינות
+      [0.05, 0.05],
+      [0.95, 0.05],
+      [0.95, 0.95],
+      [0.05, 0.95],
 
-    // אמצעי צלעות
-    [0.50, 0.05],
-    [0.95, 0.50],
-    [0.50, 0.95],
-    [0.05, 0.50],
+      // אמצעי צלעות
+      [0.50, 0.05],
+      [0.95, 0.50],
+      [0.50, 0.95],
+      [0.05, 0.50],
 
-    // מרכז
-    [0.50, 0.50],
+      // מרכז
+      [0.50, 0.50],
 
-    // טבעת פנימית (ריבוע פנימי)
-    [0.33, 0.33],
-    [0.67, 0.33],
-    [0.67, 0.67],
-    [0.33, 0.67],
+      // טבעת פנימית (ריבוע פנימי)
+      [0.33, 0.33],
+      [0.67, 0.33],
+      [0.67, 0.67],
+      [0.33, 0.67],
 
-    // שתי נקודות אלכסון להשלמת 15
-    [0.25, 0.75],
-    [0.75, 0.25]
-  ];
+      // שתי נקודות אלכסון להשלמת 15
+      [0.25, 0.75],
+      [0.75, 0.25]
+    ];
 
-  const pts = [];
-  for (let i = 0; i < count; i++) {
-    const [nx, ny] = pattern[i % pattern.length]; // ליתר ביטחון אם count ≠ 15
-    pts.push({
-      x: m + nx * W,
-      y: m + ny * H
-    });
+    const pts = [];
+    for (let i = 0; i < count; i++) {
+      const [nx, ny] = pattern[i % pattern.length];
+      pts.push({
+        x: m + nx * W,
+        y: m + ny * H
+      });
+    }
+    return pts;
   }
-  return pts;
-}
 
   function startCalibrationSequence(){
     calibrationPoints = generateCalibrationPoints(CALIB_POINTS_TOTAL);
@@ -647,14 +672,8 @@ function generateCalibrationPoints(count){
       isCalibrated = true;
       startBtn.disabled = false;
 
-      overlayTitle.textContent = "המערכת מכויילת";
-      overlayText.textContent = "המערכת מכויילת. אנא לחץ על \"התחל המשימה\" כדי להתחיל את המשימה.";
-      overlayContinue.textContent = "התחל המשימה";
-      overlay.style.display = "grid";
-      overlayContinue.onclick = () => {
-        overlay.style.display = "none";
-        startSession();
-      };
+      // במקום להתחיל משימה מיד – מציגים מסך הוראות
+      showTaskInstructions();
       draw();
     } else {
       draw();
@@ -670,6 +689,23 @@ function generateCalibrationPoints(count){
     overlayContinue.onclick = () => {
       overlay.style.display = "none";
       startWebgazerAndCalibration();
+    };
+  }
+
+  // מסך הוראות המשימה לאחר כיול
+  function showTaskInstructions(){
+    overlayTitle.textContent = "הוראות המשימה";
+    overlayText.innerHTML =
+      "1. יש לבחור מספרים רק בסדר עולה (1, 2, 3 וכן הלאה).<br>" +
+      "2. אם עשית טעות וברצונך לתקן – לחיצה נוספת על אותה ספרה תבטל את הבחירה.<br>" +
+      "3. אם נעשתה טעות אך המשכת במשימה – הקווים יימחקו ותצטרך להתחיל שוב את הרצף שבו אתה נמצא.<br><br>" +
+      "בהצלחה!";
+    overlayContinue.textContent = "המשך להזנת קוד משתמש";
+    overlay.style.display = "grid";
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+      // בשלב זה המשתתף ממלא PID ולוחץ על \"התחל משימה\"
+      pidInput.focus();
     };
   }
 
@@ -1007,7 +1043,7 @@ function generateCalibrationPoints(count){
   function startSession(){
     const pid = (pidInput.value || "").trim();
     if (!pid){
-      alert("נא למלא מזהה נבדק לפני תחילת הסשן.");
+      alert("נא למלא מזהה נבדק לפני תחילת המשימה.");
       return;
     }
     running = true;
