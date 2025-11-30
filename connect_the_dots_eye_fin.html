@@ -853,8 +853,17 @@
     }
   }
 
-  canvas.addEventListener("pointerdown", handlePointerDown);
-  canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
+   // מאזינים לקנבס גם ל-pointerdown וגם ל-click כדי לעבוד טוב גם במק/Safari
+  ["pointerdown", "click"].forEach(ev => {
+    canvas.addEventListener(ev, e => {
+      e.preventDefault();   // מבטל את ה-default כדי למנוע יצירת click נוסף
+      handlePointerDown(e);
+    });
+  });
+
+  // מגע במסכים ניידים נשאר כמו שהיה
+  canvas.addEventListener("touchstart", handlePointerDown, { passive: true });
+
 
   // ======================= שליחה לטופס 3 (לוג משימות) =======================
   function sendTaskToLogForm(row){
