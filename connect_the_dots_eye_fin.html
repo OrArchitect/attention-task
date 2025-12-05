@@ -151,8 +151,7 @@
     initialPoints: 16,    // כמות נקודות קבועה בכל משימה
     incrementBy: 0,       // אין העלאת קושי – תמיד 16 נקודות
     minDistance: 30,
-    lineAvoidDistance: 16,
-    margin: 30
+    lineAvoidDistance: 16
   };
 
   // ======================= שליחה ל-Google Drive =======================
@@ -242,13 +241,14 @@
   let calibrationPoints = [];
   let calibrationIndex = 0;
 
-  // סטטיסטיקות מעקב עיניים
+  // ======================= סטטיסטיקות מעקב עיניים =======================
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastHadData: false, // האם בפעם האחרונה היינו ON_SCREEN
-    lastX: null,        // המיקום האחרון שהיה על הקאנבס
+    lastHadData: false, // האם בפעם האחרונה היינו על הקאנבס (T או D)
+    lastX: null,
     lastY: null,
+    lastZone: "O",      // "T" / "D" / "O"
     totalOnMs: 0,
     totalOffMs: 0,
     totalSamples: 0,
@@ -258,7 +258,9 @@
     offLeftEvents: 0,
     offRightEvents: 0,
     offUpEvents: 0,
-    offDownEvents: 0
+    offDownEvents: 0,
+    timeTaskMs: 0,      // זמן באזור המשימה (T)
+    timeDeviationMs: 0  // זמן באזור הסטייה (D)
   };
 
   const gazeTimeline = [];
@@ -269,6 +271,7 @@
     gazeStats.lastHadData = false;
     gazeStats.lastX = null;
     gazeStats.lastY = null;
+    gazeStats.lastZone = "O";
     gazeStats.totalOnMs = 0;
     gazeStats.totalOffMs = 0;
     gazeStats.totalSamples = 0;
@@ -279,7 +282,49 @@
     gazeStats.offRightEvents = 0;
     gazeStats.offUpEvents = 0;
     gazeStats.offDownEvents = 0;
+    gazeStats.timeTaskMs = 0;
+    gazeStats.timeDeviationMs = 0;
     gazeTimeline.length = 0;
+  }
+
+  // ======================= חלוקה לאזורים: Task / Deviation / Off =======================
+
+  // מחזירה אובייקט עם:
+  // canvasRect – מלבן הקאנבס
+  // innerRect  – מלבן פנימי (2/3 מרכזי) = אזור המשימה (T)
+  function getZoneRects(){
+    const rect = canvas.getBoundingClientRect();
+    const marginX = rect.width / 6;   // כך נשאר 2/3 במרכז
+    const marginY = rect.height / 6;
+
+    const innerRect = {
+      left:   rect.left + marginX,
+      right:  rect.right - marginX,
+      top:    rect.top  + marginY,
+      bottom: rect.bottom - marginY
+    };
+
+    return { canvasRect: rect, innerRect };
+  }
+
+  // מסווגת דגימה לאזור: "T" = משימה, "D" = סטייה, "O" = Off (מחוץ לקאנבס)
+  function classifyZone(hadData, x, y){
+    if (!hadData || x == null || y == null){
+      return "O";
+    }
+    const { canvasRect, innerRect } = getZoneRects();
+
+    const inCanvas =
+      x >= canvasRect.left && x <= canvasRect.right &&
+      y >= canvasRect.top  && y <= canvasRect.bottom;
+
+    if (!inCanvas) return "O";
+
+    const inInner =
+      x >= innerRect.left && x <= innerRect.right &&
+      y >= innerRect.top  && y <= innerRect.bottom;
+
+    return inInner ? "T" : "D";
   }
 
   // כיוון יציאה לפי המיקום האחרון ביחס למרכז הקאנבס
@@ -299,9 +344,8 @@
     }
   }
 
-  // מאזין של WebGazer – נקרא עבור כל דגימה
+  // ======================= מאזין WebGazer =======================
   function handleGaze(data, elapsedTime){
-    // אם המשימה לא רצה – לא אוספים
     if (!running || sessionEnded){
       gazeStats.lastTime = null;
       gazeStats.lastHadData = false;
@@ -310,32 +354,35 @@
 
     const t = elapsedTime;
 
-    // בדיקת "על הקאנבס" – גם אם יש data, ייחשב OFF אם מחוץ לקאנבס
+    // האם יש בכלל דגימה גולמית
     let hadRaw = !!data;
-    let hadData = false;   // האם המבט על הקאנבס
     let sampleX = null;
     let sampleY = null;
-
     if (hadRaw){
       sampleX = data.x;
       sampleY = data.y;
+    }
 
-      const rect = canvas.getBoundingClientRect();
+    // האם הנקודה על הקאנבס (ON_SCREEN מבחינת המשימה)
+    let hadData = false;
+    if (hadRaw){
+      const { canvasRect } = getZoneRects();
       if (
-        sampleX >= rect.left && sampleX <= rect.right &&
-        sampleY >= rect.top  && sampleY <= rect.bottom
+        sampleX >= canvasRect.left && sampleX <= canvasRect.right &&
+        sampleY >= canvasRect.top  && sampleY <= canvasRect.bottom
       ){
         hadData = true;
-      } else {
-        hadData = false;
       }
     }
+
+    const zoneNow = classifyZone(hadData, sampleX, sampleY);
 
     // התחלה
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
       gazeStats.lastHadData = hadData;
+      gazeStats.lastZone = zoneNow;
       if (hadData){
         gazeStats.lastX = sampleX;
         gazeStats.lastY = sampleY;
@@ -346,17 +393,25 @@
     const dt = t - (gazeStats.lastTime || t);
     gazeStats.lastTime = t;
 
+    // זמן ON/OFF
     if (gazeStats.lastHadData){
       gazeStats.totalOnMs += dt;
     } else {
       gazeStats.totalOffMs += dt;
     }
 
+    // זמן באזורי T/D
+    if (gazeStats.lastZone === "T"){
+      gazeStats.timeTaskMs += dt;
+    } else if (gazeStats.lastZone === "D"){
+      gazeStats.timeDeviationMs += dt;
+    }
+
     gazeStats.totalSamples++;
     if (hadRaw) gazeStats.validSamples++;
     else        gazeStats.invalidSamples++;
 
-    // מעבר מ-ON_SCREEN ל-OFF_SCREEN: זיהוי כיוון יציאה
+    // מעבר מקאנבס (T/D) ל-Off (O): אירוע יציאה
     if (!hadData && gazeStats.lastHadData && gazeStats.lastX != null && gazeStats.lastY != null){
       gazeStats.offEvents++;
 
@@ -369,12 +424,13 @@
     }
 
     gazeStats.lastHadData = hadData;
+    gazeStats.lastZone = zoneNow;
     if (hadData){
       gazeStats.lastX = sampleX;
       gazeStats.lastY = sampleY;
     }
 
-    // לוג מפורט של כל דגימה
+    // טיימליין מפורט
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
     let x = "";
@@ -394,7 +450,8 @@
       x,
       y,
       on: hadData ? 1 : 0,
-      dir
+      dir,
+      zone: zoneNow
     });
   }
 
@@ -414,7 +471,9 @@
       "off_left_events",
       "off_right_events",
       "off_up_events",
-      "off_down_events"
+      "off_down_events",
+      "time_task_ms",
+      "time_deviation_ms"
     ];
     const row = [
       pid,
@@ -427,7 +486,9 @@
       gazeStats.offLeftEvents,
       gazeStats.offRightEvents,
       gazeStats.offUpEvents,
-      gazeStats.offDownEvents
+      gazeStats.offDownEvents,
+      Math.round(gazeStats.timeTaskMs),
+      Math.round(gazeStats.timeDeviationMs)
     ].join(",");
     return head.join(",") + "\n" + row + "\n";
   }
@@ -444,7 +505,8 @@
       "x",
       "y",
       "on_screen",
-      "off_direction"
+      "off_direction",
+      "zone"          // "T" / "D" / "O"
     ];
     const rows = gazeTimeline.map(sample =>
       [
@@ -454,13 +516,14 @@
         sample.x,
         sample.y,
         sample.on,
-        sample.dir
+        sample.dir,
+        sample.zone
       ].join(",")
     );
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  // התחלת WebGazer + מעבר לכיול
+  // ======================= הפעלת WebGazer וכיול =======================
   function startWebgazerAndCalibration(){
     if (!window.webgazer){
       alert("ספריית WebGazer לא נטענה. ניתן להמשיך עם המשימה בלי מעקב עיניים.");
@@ -525,12 +588,18 @@
     return Math.hypot(p.x-projX, p.y-projY);
   }
 
-  // ======================= יצירת משימה =======================
+  // ======================= יצירת נקודות – רק באזור 2/3 המרכזי =======================
   function generatePoints(n){
     const rect = canvas.getBoundingClientRect();
-    const m = CONFIG.margin;
-    const W = Math.max(rect.width - 2*m, 220);
-    const H = Math.max(rect.height - 2*m, 220);
+
+    // אזור המשימה (ה"ירוק") – 2/3 מרכזי
+    const marginX = rect.width / 6;
+    const marginY = rect.height / 6;
+
+    const left = marginX;
+    const top  = marginY;
+    const W = rect.width  - 2 * marginX;
+    const H = rect.height - 2 * marginY;
 
     const pts = [];
     let attempts = 0;
@@ -539,8 +608,8 @@
     while (pts.length < n && attempts < maxAttempts){
       attempts++;
       const candidate = {
-        x: randomBetween(m, m+W),
-        y: randomBetween(m, m+H)
+        x: randomBetween(left, left + W),
+        y: randomBetween(top,  top + H)
       };
 
       let ok = true;
@@ -567,8 +636,8 @@
 
     while (pts.length < n){
       pts.push({
-        x: randomBetween(m, m+W),
-        y: randomBetween(m, m+H)
+        x: randomBetween(left, left + W),
+        y: randomBetween(top,  top + H)
       });
     }
 
@@ -591,7 +660,7 @@
   // ======================= כיול – 17 נקודות (3×3 + קצוות) =======================
   function generateCalibrationPoints(count){
     const rect = canvas.getBoundingClientRect();
-    const m = CONFIG.margin;
+    const m = 30;
     const W = Math.max(rect.width - 2*m, 220);
     const H = Math.max(rect.height - 2*m, 220);
 
