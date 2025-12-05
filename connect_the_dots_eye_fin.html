@@ -692,7 +692,7 @@
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
-    // בזמן כיול – מציירים רק את נקודת הכיול והטקסט, בלי מסגרת לבנה
+    // 1. בזמן כיול – מציירים רק את נקודת הכיול והטקסט, בלי מסגרת לבנה
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -712,7 +712,12 @@
       return;
     }
 
-    // אחרי שהכיול נגמר – מציירים את המסגרת (אזור המשימה + טולרנס)
+    // 2. אם עדיין אין משימה (לפני "התחל משימה") – לא מציירים כלום
+    if (!currentTask){
+      return;
+    }
+
+    // 3. יש משימה פעילה – מציירים את המסגרת + הנקודות
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 1.2;
     ctx.strokeRect(
@@ -721,8 +726,6 @@
       w - 2*frameMarginX,
       h - 2*frameMarginY
     );
-
-    if (!currentTask) return;
 
     const pts = currentTask.points;
     const order = currentTask.selectionOrder;
