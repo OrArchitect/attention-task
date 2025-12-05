@@ -153,13 +153,11 @@
     lineAvoidDistance: 16
   };
 
-  // כמה המסגרת הלבנה קרובה לקצות הקנבס (באחוזים)
-  const FRAME_MARGIN_X_RATIO = 0.06; // ~6% מכל צד
-  const FRAME_MARGIN_Y_RATIO = 0.10; // ~10% מכל צד
-  // כמה מרחק להשאיר בין הנקודות למסגרת עצמה (פיקסלים)
+  const FRAME_MARGIN_X_RATIO = 0.06;
+  const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // ======================= שליחה ל-Google Drive =======================
+  // ======================= שליחה ל־Drive =======================
   const SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0lcBndONHsx5rdhRnRA/exec";
 
@@ -234,11 +232,11 @@
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastZone: "O",       // "T" / "D" / "O"
+    lastZone: "O",
     lastX: null,
     lastY: null,
-    totalOnMs: 0,        // T + D
-    totalOffMs: 0,       // O בלבד
+    totalOnMs: 0,
+    totalOffMs: 0,
     totalSamples: 0,
     validSamples: 0,
     invalidSamples: 0,
@@ -247,11 +245,10 @@
     offRightEvents: 0,
     offUpEvents: 0,
     offDownEvents: 0,
-    timeTaskMs: 0,       // זמן משימה = T + D
-    timeDeviationMs: 0   // לא בשימוש, נשאר 0
+    timeTaskMs: 0,
+    timeDeviationMs: 0
   };
 
-  // טיימליין רציף – כל הדגימות
   const gazeTimeline = [];
 
   function resetGazeStats(){
@@ -275,7 +272,7 @@
     gazeTimeline.length = 0;
   }
 
-  // ======================= אזורי משימה / סטייה =======================
+  // ======================= אזורים =======================
   function getZoneRects(){
     const rect = canvas.getBoundingClientRect();
     const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
@@ -289,7 +286,6 @@
     return { canvasRect: rect, innerRect };
   }
 
-  // "T" – בתוך המסגרת, "D" – מחוץ למסגרת אך על הקנבס, "O" – מחוץ לקנבס/אין דגימה
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
     const { canvasRect, innerRect } = getZoneRects();
@@ -305,13 +301,12 @@
     return inInner ? "T" : "D";
   }
 
-  // כיוון ביחס למרכז הקנבס
   function computeOffDirection(x, y){
     const rect = canvas.getBoundingClientRect();
     const cx = rect.left + rect.width  / 2;
     const cy = rect.top  + rect.height / 2;
-    const dx = x - cx;  // >0 = ימינה
-    const dy = y - cy;  // >0 = למטה
+    const dx = x - cx;
+    const dy = y - cy;
     if (Math.abs(dx) >= Math.abs(dy)) {
       return dx > 0 ? "R" : "L";
     } else {
@@ -336,7 +331,6 @@
 
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
 
-    // התחלה
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
@@ -348,7 +342,6 @@
       gazeStats.totalSamples = 1;
       if (hadRaw) gazeStats.validSamples = 1; else gazeStats.invalidSamples = 1;
 
-      // גם לדגימה הראשונה נרשום שורה בטיימליין
       const ms0 = Math.round(t);
       const taskIndex0 = currentTask ? currentTask.index : 0;
       const on0 = (zoneNow === "O") ? 0 : 1;
@@ -374,21 +367,17 @@
     const dt = t - (gazeStats.lastTime || t);
     gazeStats.lastTime = t;
 
-    // זמן ON/OFF לפי האזור הקודם
     if (gazeStats.lastZone === "O") gazeStats.totalOffMs += dt;
     else                            gazeStats.totalOnMs  += dt;
 
-    // זמן משימה = T + D
     if (gazeStats.lastZone === "T" || gazeStats.lastZone === "D"){
       gazeStats.timeTaskMs += dt;
     }
 
-    // ספירת דגימות
     gazeStats.totalSamples++;
     if (hadRaw) gazeStats.validSamples++;
     else        gazeStats.invalidSamples++;
 
-    // ---- אירוע OFF: מעבר מ-T או D ל-O ----
     if ((gazeStats.lastZone === "T" || gazeStats.lastZone === "D") &&
         zoneNow === "O" &&
         gazeStats.lastX != null && gazeStats.lastY != null){
@@ -400,7 +389,6 @@
       else if (dirEv === "D") gazeStats.offDownEvents++;
     }
 
-    // -------- טיימליין רציף: כל דגימה --------
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
     const onFlag = (zoneNow === "O") ? 0 : 1;
@@ -413,7 +401,6 @@
     }
 
     let dirSample = "";
-    // כיוון רק כשאנחנו ב־OFF (O) – לפי המיקום האחרון שהיה בתוך המשימה/טולרנס
     if (onFlag === 0 && gazeStats.lastX != null && gazeStats.lastY != null){
       dirSample = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
     }
@@ -427,7 +414,6 @@
       dir: dirSample
     });
 
-    // עדכון "מצב אחרון"
     gazeStats.lastZone = zoneNow;
     if (zoneNow !== "O" && hadRaw){
       gazeStats.lastX = sampleX;
@@ -466,7 +452,7 @@
       gazeStats.offUpEvents,
       gazeStats.offDownEvents,
       Math.round(gazeStats.timeTaskMs),
-      Math.round(gazeStats.timeDeviationMs) // כאן 0
+      Math.round(gazeStats.timeDeviationMs)
     ].join(",");
     return head.join(",") + "\n" + row + "\n";
   }
@@ -554,7 +540,7 @@
     return Math.hypot(p.x-projX, p.y-projY);
   }
 
-  // ======================= יצירת נקודות – רק באזור המשימה =======================
+  // ======================= יצירת נקודות =======================
   function generatePoints(n){
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
@@ -616,7 +602,7 @@
     draw();
   }
 
-  // ======================= כיול – 17 נקודות =======================
+  // ======================= כיול =======================
   function generateCalibrationPoints(count){
     const rect = canvas.getBoundingClientRect();
     const m = 30;
@@ -706,16 +692,7 @@
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
-    // מסגרת לבנה – גבול המשימה (הנקודות תמיד בפנים)
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.lineWidth = 1.2;
-    ctx.strokeRect(
-      frameMarginX,
-      frameMarginY,
-      w - 2*frameMarginX,
-      h - 2*frameMarginY
-    );
-
+    // בזמן כיול – מציירים רק את נקודת הכיול והטקסט, בלי מסגרת לבנה
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -734,6 +711,16 @@
       );
       return;
     }
+
+    // אחרי שהכיול נגמר – מציירים את המסגרת (אזור המשימה + טולרנס)
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 1.2;
+    ctx.strokeRect(
+      frameMarginX,
+      frameMarginY,
+      w - 2*frameMarginX,
+      h - 2*frameMarginY
+    );
 
     if (!currentTask) return;
 
