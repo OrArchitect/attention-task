@@ -157,8 +157,8 @@
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // OFF אמיתי – לפחות 150ms מחוץ לאזור T/D
-  const OFF_MIN_MS = 150;
+  // OFF אמיתי – לפחות 200ms מחוץ לאזור T/D
+  const OFF_MIN_MS = 200;
   // חלון זמן לתנועת העין לפני היציאה לצורך חישוב כיוון
   const DIRECTION_WINDOW_MS = 150;
 
@@ -232,6 +232,9 @@
   let calibrationActive = false;
   let calibrationPoints = [];
   let calibrationIndex = 0;
+
+  // פריסת נקודות – נשמרת לכל משימה (לקובץ points_layout)
+  const taskLayouts = [];
 
   // ======================= סטטיסטיקות מעקב עיניים =======================
   const gazeStats = {
@@ -382,7 +385,7 @@
     // מעדכן היסטוריה של נקודות בתוך אזור המשימה (T/D)
     if ((zoneNow === "T" || zoneNow === "D") && hadRaw){
       insideHistory.push({ t, x: sampleX, y: sampleY });
-      const cutoff = t - 400; // נשמור בערך 400ms אחורה
+      const cutoff = t - 400;
       while (insideHistory.length && insideHistory[0].t < cutoff){
         insideHistory.shift();
       }
@@ -407,7 +410,6 @@
         x0 = Math.round(sampleX);
         y0 = Math.round(sampleY);
       }
-      // אין כיוון בשורה הראשונה
       gazeTimeline.push({
         ms: ms0,
         task: taskIndex0,
@@ -435,7 +437,6 @@
 
     // לוגיקת OFF עם סף זמן
     if (zoneNow === "T" || zoneNow === "D"){
-      // חזרנו לאזור תקין – מאפסים מצב OFF
       if (offState.candidate || offState.inOff){
         offState.candidate = false;
         offState.candidateStart = null;
@@ -443,13 +444,11 @@
         offState.dir = "";
       }
     } else if (zoneNow === "O"){
-      // עזבנו את אזור המשימה
       if ((gazeStats.lastZone === "T" || gazeStats.lastZone === "D") && !offState.candidate){
         offState.candidate = true;
         offState.candidateStart = t;
         offState.dir = computeOffDirectionSmart(sampleX, sampleY);
       }
-      // בודקים אם עבר סף הזמן ל-OFF אמיתי
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
@@ -474,7 +473,6 @@
     }
 
     let dirSample = "";
-    // רושמים כיוון רק אם אנחנו בתוך OFF מאושר
     if (onFlag === 0 && offState.inOff && offState.dir){
       dirSample = offState.dir;
     }
@@ -552,6 +550,31 @@
         s.y,
         s.on,
         s.dir
+      ].join(",")
+    );
+    return head.join(",") + "\n" + rows.join("\n");
+  }
+
+  // CSV של פריסת הנקודות (מספרים) לכל משימה
+  function buildPointsLayoutCsv(){
+    const pid = (pidInput.value || "").trim();
+    if (!taskLayouts.length) return "";
+    const head = [
+      "pid",
+      "task_index",
+      "point_index",
+      "number",
+      "x_screen",
+      "y_screen"
+    ];
+    const rows = taskLayouts.map(row =>
+      [
+        pid,
+        row.task_index,
+        row.point_index,
+        row.number,
+        Math.round(row.x_screen),
+        Math.round(row.y_screen)
       ].join(",")
     );
     return head.join(",") + "\n" + rows.join("\n");
@@ -665,14 +688,35 @@
 
   function openNewTask(n){
     pendingNextTaskPoints = null;
+
+    // יצירת נקודות למשימה
+    const pts = generatePoints(n);
     currentTask = {
       index: ++taskCounter,
-      points: generatePoints(n),
+      points: pts,
       selected: new Set(),
       selectionOrder: [],
       errors: 0,
       startTime: now()
     };
+
+    // לוג של מיקום הנקודות במסך (screen coords) עבור הניתוח
+    try {
+      const rect = canvas.getBoundingClientRect();
+      const layoutRows = pts.map((p, idx) => {
+        return {
+          task_index: currentTask.index,
+          point_index: idx + 1,
+          number: idx + 1,
+          x_screen: rect.left + p.x,
+          y_screen: rect.top  + p.y
+        };
+      });
+      taskLayouts.push(...layoutRows);
+    } catch (e) {
+      console.warn("Failed to log task layout:", e);
+    }
+
     draw();
   }
 
@@ -860,7 +904,7 @@
     const order = task.selectionOrder;
     const n = task.points.length;
     if (order.length !== n) return false;
-    for (let i=0;i<n;i++){
+    for (let i=0; i<n; i++){
       if (order[i] !== i) return false;
     }
     return true;
@@ -1038,6 +1082,9 @@
 
     const eyeTimelineCsv = buildEyeTimelineCsv();
     if (eyeTimelineCsv) sendCsvToDrive(eyeTimelineCsv, "webgazer_eye_timeline");
+
+    const layoutCsv = buildPointsLayoutCsv();
+    if (layoutCsv) sendCsvToDrive(layoutCsv, "points_layout");
 
     if (window.webgazer){
       try { webgazer.end(); } catch(e){}
