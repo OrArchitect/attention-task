@@ -246,8 +246,8 @@
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastHadData: false,
-    lastX: null,
+    lastHadData: false, // האם בפעם האחרונה היינו ON_SCREEN
+    lastX: null,        // המיקום האחרון שהיה על הקאנבס
     lastY: null,
     totalOnMs: 0,
     totalOffMs: 0,
@@ -301,25 +301,44 @@
 
   // מאזין של WebGazer – נקרא עבור כל דגימה
   function handleGaze(data, elapsedTime){
+    // אם המשימה לא רצה – לא אוספים
     if (!running || sessionEnded){
       gazeStats.lastTime = null;
-      gazeStats.lastHadData = !!data;
-      if (data){
-        gazeStats.lastX = data.x;
-        gazeStats.lastY = data.y;
-      }
+      gazeStats.lastHadData = false;
       return;
     }
 
     const t = elapsedTime;
 
+    // בדיקת "על הקאנבס" – גם אם יש data, ייחשב OFF אם מחוץ לקאנבס
+    let hadRaw = !!data;
+    let hadData = false;   // האם המבט על הקאנבס
+    let sampleX = null;
+    let sampleY = null;
+
+    if (hadRaw){
+      sampleX = data.x;
+      sampleY = data.y;
+
+      const rect = canvas.getBoundingClientRect();
+      if (
+        sampleX >= rect.left && sampleX <= rect.right &&
+        sampleY >= rect.top  && sampleY <= rect.bottom
+      ){
+        hadData = true;
+      } else {
+        hadData = false;
+      }
+    }
+
+    // התחלה
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
-      gazeStats.lastHadData = !!data;
-      if (data){
-        gazeStats.lastX = data.x;
-        gazeStats.lastY = data.y;
+      gazeStats.lastHadData = hadData;
+      if (hadData){
+        gazeStats.lastX = sampleX;
+        gazeStats.lastY = sampleY;
       }
       return;
     }
@@ -333,12 +352,11 @@
       gazeStats.totalOffMs += dt;
     }
 
-    const hadData = !!data;
     gazeStats.totalSamples++;
-    if (hadData) gazeStats.validSamples++;
-    else gazeStats.invalidSamples++;
+    if (hadRaw) gazeStats.validSamples++;
+    else        gazeStats.invalidSamples++;
 
-    // מעבר מ-ON ל-OFF: זיהוי כיוון יציאה
+    // מעבר מ-ON_SCREEN ל-OFF_SCREEN: זיהוי כיוון יציאה
     if (!hadData && gazeStats.lastHadData && gazeStats.lastX != null && gazeStats.lastY != null){
       gazeStats.offEvents++;
 
@@ -352,8 +370,8 @@
 
     gazeStats.lastHadData = hadData;
     if (hadData){
-      gazeStats.lastX = data.x;
-      gazeStats.lastY = data.y;
+      gazeStats.lastX = sampleX;
+      gazeStats.lastY = sampleY;
     }
 
     // לוג מפורט של כל דגימה
@@ -364,8 +382,8 @@
     let dir = "";
 
     if (hadData){
-      x = Math.round(data.x);
-      y = Math.round(data.y);
+      x = Math.round(sampleX);
+      y = Math.round(sampleY);
     } else if (gazeStats.lastX != null && gazeStats.lastY != null){
       dir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
     }
