@@ -251,7 +251,8 @@
     timeDeviationMs: 0   // לא בשימוש, נשאר 0
   };
 
-  const gazeTimeline = []; // שורות רק עבור O
+  // טיימליין רציף – כל הדגימות
+  const gazeTimeline = [];
 
   function resetGazeStats(){
     gazeStats.hasStarted = false;
@@ -346,6 +347,27 @@
       }
       gazeStats.totalSamples = 1;
       if (hadRaw) gazeStats.validSamples = 1; else gazeStats.invalidSamples = 1;
+
+      // גם לדגימה הראשונה נרשום שורה בטיימליין
+      const ms0 = Math.round(t);
+      const taskIndex0 = currentTask ? currentTask.index : 0;
+      const on0 = (zoneNow === "O") ? 0 : 1;
+      let x0 = "", y0 = "", dir0 = "";
+      if (on0 === 1 && hadRaw){
+        x0 = Math.round(sampleX);
+        y0 = Math.round(sampleY);
+      }
+      if (on0 === 0 && sampleX != null && sampleY != null){
+        dir0 = computeOffDirection(sampleX, sampleY);
+      }
+      gazeTimeline.push({
+        ms: ms0,
+        task: taskIndex0,
+        x: x0,
+        y: y0,
+        on: on0,
+        dir: dir0
+      });
       return;
     }
 
@@ -378,20 +400,32 @@
       else if (dirEv === "D") gazeStats.offDownEvents++;
     }
 
-    // -------- טיימליין: שורה רק כשהמצב הנוכחי הוא O --------
-    if (zoneNow === "O"){
-      const ms = Math.round(t);
-      const taskIndex = currentTask ? currentTask.index : 0;
-      let offDirSample = "";
-      if (gazeStats.lastX != null && gazeStats.lastY != null){
-        offDirSample = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
-      }
-      gazeTimeline.push({
-        ms,
-        task: taskIndex,
-        dir: offDirSample
-      });
+    // -------- טיימליין רציף: כל דגימה --------
+    const ms = Math.round(t);
+    const taskIndex = currentTask ? currentTask.index : 0;
+    const onFlag = (zoneNow === "O") ? 0 : 1;
+
+    let xOut = "";
+    let yOut = "";
+    if (onFlag === 1 && hadRaw){
+      xOut = Math.round(sampleX);
+      yOut = Math.round(sampleY);
     }
+
+    let dirSample = "";
+    // כיוון רק כשאנחנו ב־OFF (O) – לפי המיקום האחרון שהיה בתוך המשימה/טולרנס
+    if (onFlag === 0 && gazeStats.lastX != null && gazeStats.lastY != null){
+      dirSample = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
+    }
+
+    gazeTimeline.push({
+      ms,
+      task: taskIndex,
+      x: xOut,
+      y: yOut,
+      on: onFlag,
+      dir: dirSample
+    });
 
     // עדכון "מצב אחרון"
     gazeStats.lastZone = zoneNow;
@@ -444,6 +478,9 @@
       "pid",
       "task_index",
       "ms",
+      "x",
+      "y",
+      "on_screen",
       "off_direction"
     ];
     const rows = gazeTimeline.map(s =>
@@ -451,6 +488,9 @@
         pid,
         s.task,
         s.ms,
+        s.x,
+        s.y,
+        s.on,
         s.dir
       ].join(",")
     );
@@ -666,7 +706,7 @@
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
-    // מסגרת לבנה – גבול המשימה (T + D בפנים המסך)
+    // מסגרת לבנה – גבול המשימה (הנקודות תמיד בפנים)
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 1.2;
     ctx.strokeRect(
