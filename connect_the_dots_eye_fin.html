@@ -237,7 +237,8 @@
 
   // ======================= WebGazer / כיול =======================
   let isCalibrated = false;
-  const CALIB_POINTS_TOTAL = 15;
+  // נשתמש ב-17 נקודות (9 רשת + 8 קצוות)
+  const CALIB_POINTS_TOTAL = 17;
   let calibrationActive = false;
   let calibrationPoints = [];
   let calibrationIndex = 0;
@@ -280,6 +281,38 @@
     gazeStats.offUpEvents = 0;
     gazeStats.offDownEvents = 0;
     gazeTimeline.length = 0;
+  }
+
+  // פונקציה עוזרת – כיוון יציאה לפי מיקום אחרון (עם אזורי קצה)
+  function computeOffDirection(x, y){
+    const w = window.innerWidth  || document.documentElement.clientWidth  || 1;
+    const h = window.innerHeight || document.documentElement.clientHeight || 1;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    const dx = x - cx;
+    const dy = y - cy;
+
+    const fx = x / w; // 0..1
+    const fy = y / h; // 0..1
+
+    let horiz = "";
+    let vert  = "";
+
+    if (fx < 0.3)      horiz = "L";
+    else if (fx > 0.7) horiz = "R";
+
+    if (fy < 0.3)      vert = "U";
+    else if (fy > 0.7) vert = "D";
+
+    if (!horiz && !vert) return "";
+
+    if (horiz && vert){
+      // אם יש גם וגם – מחליטים לפי מי רחוק יותר מהמרכז
+      if (Math.abs(dx) >= Math.abs(dy)) return horiz;
+      return vert;
+    }
+    return horiz || vert;
   }
 
   // מאזין של WebGazer – נקרא עבור כל דגימה
@@ -328,27 +361,12 @@
     if (!hadData && gazeStats.lastHadData && gazeStats.lastX != null && gazeStats.lastY != null){
       gazeStats.offEvents++;
 
-      const w = window.innerWidth  || document.documentElement.clientWidth  || 1;
-      const h = window.innerHeight || document.documentElement.clientHeight || 1;
-      const cx = w / 2;
-      const cy = h / 2;
+      const dir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
 
-      const dx = gazeStats.lastX - cx; // >0 = ימינה (ימין הנבדק)
-      const dy = gazeStats.lastY - cy; // >0 = למטה (מטה הנבדק)
-
-      if (Math.abs(dx) >= Math.abs(dy)) {
-        if (dx > 0) {
-          gazeStats.offRightEvents++; // R
-        } else {
-          gazeStats.offLeftEvents++;  // L
-        }
-      } else {
-        if (dy > 0) {
-          gazeStats.offDownEvents++;  // D
-        } else {
-          gazeStats.offUpEvents++;    // U
-        }
-      }
+      if (dir === "L")      gazeStats.offLeftEvents++;
+      else if (dir === "R") gazeStats.offRightEvents++;
+      else if (dir === "U") gazeStats.offUpEvents++;
+      else if (dir === "D") gazeStats.offDownEvents++;
     }
 
     gazeStats.lastHadData = hadData;
@@ -369,19 +387,7 @@
       y = Math.round(data.y);
     } else if (gazeStats.lastX != null && gazeStats.lastY != null){
       // כשהמבט מחוץ למסך – כיוון לפי המיקום האחרון
-      const w = window.innerWidth  || document.documentElement.clientWidth  || 1;
-      const h = window.innerHeight || document.documentElement.clientHeight || 1;
-      const cx = w / 2;
-      const cy = h / 2;
-
-      const dx = gazeStats.lastX - cx;
-      const dy = gazeStats.lastY - cy;
-
-      if (Math.abs(dx) >= Math.abs(dy)) {
-        dir = dx > 0 ? "R" : "L";
-      } else {
-        dir = dy > 0 ? "D" : "U";
-      }
+      dir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
     }
 
     gazeTimeline.push({
@@ -584,34 +590,46 @@
     draw();
   }
 
-  // ======================= כיול – נקודות אדומות =======================
+  // ======================= כיול – 17 נקודות (3×3 + קצוות) =======================
   function generateCalibrationPoints(count){
     const rect = canvas.getBoundingClientRect();
     const m = CONFIG.margin;
     const W = Math.max(rect.width - 2*m, 220);
     const H = Math.max(rect.height - 2*m, 220);
 
+    // נקודות מנורמלות (0–1) ביחס לאזור הכיול
+    // 9 נקודות רשת 3×3 + 8 נקודות קצה
     const pattern = [
-      [0.05, 0.05],
-      [0.95, 0.05],
-      [0.95, 0.95],
-      [0.05, 0.95],
-      [0.50, 0.05],
-      [0.95, 0.50],
-      [0.50, 0.95],
-      [0.05, 0.50],
+      // רשת 3x3
+      [0.10, 0.10],
+      [0.50, 0.10],
+      [0.90, 0.10],
+
+      [0.10, 0.50],
       [0.50, 0.50],
-      [0.33, 0.33],
-      [0.67, 0.33],
-      [0.67, 0.67],
-      [0.33, 0.67],
-      [0.25, 0.75],
-      [0.75, 0.25]
+      [0.90, 0.50],
+
+      [0.10, 0.90],
+      [0.50, 0.90],
+      [0.90, 0.90],
+
+      // נקודות קצה קרובות לשמאל/ימין
+      [0.05, 0.20],
+      [0.95, 0.20],
+      [0.05, 0.80],
+      [0.95, 0.80],
+
+      // נקודות קצה קרובות למעלה/למטה
+      [0.20, 0.05],
+      [0.80, 0.05],
+      [0.20, 0.95],
+      [0.80, 0.95]
     ];
 
+    const needed = Math.min(count, pattern.length);
     const pts = [];
-    for (let i = 0; i < count; i++) {
-      const [nx, ny] = pattern[i % pattern.length];
+    for (let i = 0; i < needed; i++){
+      const [nx, ny] = pattern[i];
       pts.push({
         x: m + nx * W,
         y: m + ny * H
@@ -675,7 +693,7 @@
   function showCalibrationIntro(){
     overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים";
     overlayText.textContent =
-      "על מנת לכייל את המערכת, יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 15 נקודות אדומות במקומות שונים על המסך – יש להביט בכל נקודה וללחוץ עליה.";
+      "על מנת לכייל את המערכת, יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות במקומות שונים על המסך – יש להביט בכל נקודה וללחוץ עליה.";
     overlayContinue.textContent = "פתח מצלמה וכייל";
     overlay.style.display = "grid";
     overlayContinue.onclick = () => {
