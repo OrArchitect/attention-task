@@ -237,8 +237,7 @@
 
   // ======================= WebGazer / כיול =======================
   let isCalibrated = false;
-  // נשתמש ב-17 נקודות (9 רשת + 8 קצוות)
-  const CALIB_POINTS_TOTAL = 17;
+  const CALIB_POINTS_TOTAL = 17; // 9 רשת + 8 קצוות
   let calibrationActive = false;
   let calibrationPoints = [];
   let calibrationIndex = 0;
@@ -283,41 +282,25 @@
     gazeTimeline.length = 0;
   }
 
-  // פונקציה עוזרת – כיוון יציאה לפי מיקום אחרון (עם אזורי קצה)
+  // כיוון יציאה לפי המיקום האחרון ביחס למרכז הקאנבס
   function computeOffDirection(x, y){
-    const w = window.innerWidth  || document.documentElement.clientWidth  || 1;
-    const h = window.innerHeight || document.documentElement.clientHeight || 1;
-    const cx = w / 2;
-    const cy = h / 2;
+    const rect = canvas.getBoundingClientRect();
 
-    const dx = x - cx;
-    const dy = y - cy;
+    const cx = rect.left + rect.width  / 2;
+    const cy = rect.top  + rect.height / 2;
 
-    const fx = x / w; // 0..1
-    const fy = y / h; // 0..1
+    const dx = x - cx;  // >0 = ימינה
+    const dy = y - cy;  // >0 = למטה
 
-    let horiz = "";
-    let vert  = "";
-
-    if (fx < 0.3)      horiz = "L";
-    else if (fx > 0.7) horiz = "R";
-
-    if (fy < 0.3)      vert = "U";
-    else if (fy > 0.7) vert = "D";
-
-    if (!horiz && !vert) return "";
-
-    if (horiz && vert){
-      // אם יש גם וגם – מחליטים לפי מי רחוק יותר מהמרכז
-      if (Math.abs(dx) >= Math.abs(dy)) return horiz;
-      return vert;
+    if (Math.abs(dx) >= Math.abs(dy)) {
+      return dx > 0 ? "R" : "L";
+    } else {
+      return dy > 0 ? "D" : "U";
     }
-    return horiz || vert;
   }
 
   // מאזין של WebGazer – נקרא עבור כל דגימה
   function handleGaze(data, elapsedTime){
-    // אם המשימה לא רצה – לא אוספים נתונים
     if (!running || sessionEnded){
       gazeStats.lastTime = null;
       gazeStats.lastHadData = !!data;
@@ -328,9 +311,8 @@
       return;
     }
 
-    const t = elapsedTime; // ms מאז תחילת webgazer
+    const t = elapsedTime;
 
-    // תחילת דגימה
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
@@ -345,7 +327,6 @@
     const dt = t - (gazeStats.lastTime || t);
     gazeStats.lastTime = t;
 
-    // זמן ON/OFF מסך
     if (gazeStats.lastHadData){
       gazeStats.totalOnMs += dt;
     } else {
@@ -357,7 +338,7 @@
     if (hadData) gazeStats.validSamples++;
     else gazeStats.invalidSamples++;
 
-    // מעבר מ־ON ל־OFF: זיהוי כיוון יציאה L/R/U/D
+    // מעבר מ-ON ל-OFF: זיהוי כיוון יציאה
     if (!hadData && gazeStats.lastHadData && gazeStats.lastX != null && gazeStats.lastY != null){
       gazeStats.offEvents++;
 
@@ -386,7 +367,6 @@
       x = Math.round(data.x);
       y = Math.round(data.y);
     } else if (gazeStats.lastX != null && gazeStats.lastY != null){
-      // כשהמבט מחוץ למסך – כיוון לפי המיקום האחרון
       dir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
     }
 
@@ -597,8 +577,6 @@
     const W = Math.max(rect.width - 2*m, 220);
     const H = Math.max(rect.height - 2*m, 220);
 
-    // נקודות מנורמלות (0–1) ביחס לאזור הכיול
-    // 9 נקודות רשת 3×3 + 8 נקודות קצה
     const pattern = [
       // רשת 3x3
       [0.10, 0.10],
@@ -706,7 +684,6 @@
   function draw(){
     ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
 
-    // מצב כיול – מציג נקודה אדומה
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -731,7 +708,6 @@
     const pts = currentTask.points;
     const order = currentTask.selectionOrder;
 
-    // קווים
     if (order.length > 1){
       ctx.strokeStyle = "#e5e7eb";
       ctx.lineWidth = 2;
@@ -745,7 +721,6 @@
       ctx.stroke();
     }
 
-    // נקודות ומספרים
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = "14px system-ui, Arial";
@@ -805,7 +780,6 @@
   }
 
   function handlePointerDown(ev){
-    // כיול
     if (calibrationActive){
       handleCalibrationClick(ev);
       return;
@@ -986,7 +960,6 @@
       logTask(false);
     }
 
-    // CSV משימות
     const csv = buildCsv();
     console.log("CSV built. length =", csv.length);
     if (csv) {
@@ -996,7 +969,6 @@
       console.log("No CSV content – nothing to send");
     }
 
-    // CSV סיכום מעקב עיניים
     const eyeCsv = buildEyeCsv();
     console.log("Eye CSV built. length =", eyeCsv.length);
     if (eyeCsv){
@@ -1006,7 +978,6 @@
       console.log("No eye CSV content – nothing to send (summary)");
     }
 
-    // CSV טיימליין מפורט
     const eyeTimelineCsv = buildEyeTimelineCsv();
     console.log("Eye timeline CSV length =", eyeTimelineCsv.length);
     if (eyeTimelineCsv){
@@ -1081,7 +1052,6 @@
   startBtn.addEventListener("click", handleStartClick);
   endBtn.addEventListener("click", handleEndClick);
 
-  // מציג חלון כיול כבר בהתחלה
   showCalibrationIntro();
 })();
 </script>
