@@ -144,6 +144,7 @@
 
 <script>
 (() => {
+  // ======================= הגדרות כלליות =======================
   const CONFIG = {
     sessionMinutes: 10,
     initialPoints: 16,
@@ -152,6 +153,13 @@
     lineAvoidDistance: 16
   };
 
+  // כמה המסגרת הלבנה קרובה לקצות הקנבס (באחוזים)
+  const FRAME_MARGIN_X_RATIO = 0.06; // ~6% מכל צד
+  const FRAME_MARGIN_Y_RATIO = 0.10; // ~10% מכל צד
+  // כמה מרחק להשאיר בין הנקודות למסגרת עצמה (פיקסלים)
+  const POINT_INNER_PADDING = 40;
+
+  // ======================= שליחה ל-Google Drive =======================
   const SCRIPT_URL =
     "https://script.google.com/macros/s/AKfycbzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0lcBndONHsx5rdhRnRA/exec";
 
@@ -171,6 +179,7 @@
     }).catch(err => console.error("Failed to send CSV to Drive:", err));
   }
 
+  // ======================= טפסים =======================
   const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
   const ENTRY_PID             = "entry.404955311";
   const ENTRY_TOTAL_TASKS     = "entry.1331557537";
@@ -192,6 +201,7 @@
   const LOG_ENTRY_COMPLETED  = "entry.1100470565";
   const LOG_ENTRY_TIMESTAMP  = "entry.1243807469";
 
+  // ======================= DOM =======================
   const canvas = document.getElementById("stage");
   const ctx = canvas.getContext("2d");
   const pidInput = document.getElementById("pid");
@@ -202,6 +212,7 @@
   const overlayText = document.getElementById("overlayText");
   const overlayContinue = document.getElementById("overlayContinue");
 
+  // ======================= STATE =======================
   let running = false;
   let sessionStart = null;
   let experimentStartIso = null;
@@ -212,16 +223,18 @@
   let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
+  // כיול
   let isCalibrated = false;
   const CALIB_POINTS_TOTAL = 17;
   let calibrationActive = false;
   let calibrationPoints = [];
   let calibrationIndex = 0;
 
+  // ======================= סטטיסטיקות מעקב עיניים =======================
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastHadData: false,  // האם על הקאנבס (T או D)
+    lastHadData: false,  // האם על הקנבס בכלל
     lastX: null,
     lastY: null,
     lastZone: "O",       // "T" / "D" / "O"
@@ -263,11 +276,14 @@
     gazeTimeline.length = 0;
   }
 
-  // --------- אזורי משימה / סטייה ---------
+  // ======================= אזורי משימה / סטייה =======================
+  // מחזיר:
+  // canvasRect – מלבן הקנבס (ב־client coords)
+  // innerRect  – המסגרת הלבנה (גבול המשימה)
   function getZoneRects(){
     const rect = canvas.getBoundingClientRect();
-    const marginX = rect.width / 6;
-    const marginY = rect.height / 6;
+    const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
+    const marginY = Math.max(rect.height * FRAME_MARGIN_Y_RATIO, 40);
     const innerRect = {
       left:   rect.left + marginX,
       right:  rect.right - marginX,
@@ -277,11 +293,11 @@
     return { canvasRect: rect, innerRect };
   }
 
-  // "T" – בתוך המסגרת, "D" – מחוץ למסגרת אך על הקאנבס, "O" – מחוץ לקאנבס / אין דגימה
+  // "T" – בתוך המסגרת, "D" – מחוץ למסגרת אך על הקנבס, "O" – מחוץ לקנבס / אין דגימה
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
-
     const { canvasRect, innerRect } = getZoneRects();
+
     const inCanvas =
       x >= canvasRect.left && x <= canvasRect.right &&
       y >= canvasRect.top  && y <= canvasRect.bottom;
@@ -293,12 +309,13 @@
     return inInner ? "T" : "D";
   }
 
+  // כיוון ביחס למרכז הקנבס
   function computeOffDirection(x, y){
     const rect = canvas.getBoundingClientRect();
     const cx = rect.left + rect.width  / 2;
     const cy = rect.top  + rect.height / 2;
-    const dx = x - cx;
-    const dy = y - cy;
+    const dx = x - cx;  // >0 = ימינה
+    const dy = y - cy;  // >0 = למטה
     if (Math.abs(dx) >= Math.abs(dy)) {
       return dx > 0 ? "R" : "L";
     } else {
@@ -306,6 +323,7 @@
     }
   }
 
+  // ======================= מאזין WebGazer =======================
   function handleGaze(data, elapsedTime){
     if (!running || sessionEnded){
       gazeStats.lastTime = null;
@@ -335,6 +353,7 @@
 
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
 
+    // התחלה
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
@@ -350,9 +369,11 @@
     const dt = t - (gazeStats.lastTime || t);
     gazeStats.lastTime = t;
 
+    // ON/OFF כלליים
     if (gazeStats.lastHadData) gazeStats.totalOnMs += dt;
     else                       gazeStats.totalOffMs += dt;
 
+    // זמן באזורי משימה / סטייה
     if (gazeStats.lastZone === "T") gazeStats.timeTaskMs += dt;
     else if (gazeStats.lastZone === "D") gazeStats.timeDeviationMs += dt;
 
@@ -360,15 +381,15 @@
     if (hadRaw) gazeStats.validSamples++;
     else        gazeStats.invalidSamples++;
 
-    // ---- אירוע "בריחה": יציאה מהמסגרת הלבנה (T -> !T) ----
+    // ---- אירוע "בריחה": יציאה מתוך המסגרת (T -> !T) ----
     if (gazeStats.lastZone === "T" && zoneNow !== "T" &&
         gazeStats.lastX != null && gazeStats.lastY != null){
       gazeStats.offEvents++;
-      const dir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
-      if (dir === "L")      gazeStats.offLeftEvents++;
-      else if (dir === "R") gazeStats.offRightEvents++;
-      else if (dir === "U") gazeStats.offUpEvents++;
-      else if (dir === "D") gazeStats.offDownEvents++;
+      const dirEv = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
+      if (dirEv === "L")      gazeStats.offLeftEvents++;
+      else if (dirEv === "R") gazeStats.offRightEvents++;
+      else if (dirEv === "U") gazeStats.offUpEvents++;
+      else if (dirEv === "D") gazeStats.offDownEvents++;
     }
 
     gazeStats.lastHadData = hadData;
@@ -378,16 +399,29 @@
       gazeStats.lastY = sampleY;
     }
 
+    // -------- טיימליין מפורט --------
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
     let x = "";
     let y = "";
-    let dir = "";
+    let offDirSample = "";
+    let zoneDir = "";
+
     if (hadData){
       x = Math.round(sampleX);
       y = Math.round(sampleY);
-    } else if (gazeStats.lastX != null && gazeStats.lastY != null){
-      dir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
+    }
+
+    // off_direction – כיוון עזיבה מהמסגרת (רלוונטי בעיקר לדגימה הראשונה אחרי T)
+    if (!hadData && gazeStats.lastX != null && gazeStats.lastY != null){
+      offDirSample = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
+    }
+
+    // zone_dir – כיוון האזור הנוכחי (Deviation / O) ביחס למרכז
+    if (zoneNow === "D" && hadData){
+      zoneDir = computeOffDirection(sampleX, sampleY);
+    } else if (zoneNow === "O" && gazeStats.lastX != null && gazeStats.lastY != null){
+      zoneDir = computeOffDirection(gazeStats.lastX, gazeStats.lastY);
     }
 
     gazeTimeline.push({
@@ -396,8 +430,9 @@
       x,
       y,
       on: hadData ? 1 : 0,
-      dir,
-      zone: zoneNow    // לניתוח, אפשר גם להתעלם
+      dir: offDirSample,
+      zone: zoneNow,
+      zoneDir: zoneDir
     });
   }
 
@@ -448,14 +483,26 @@
       "y",
       "on_screen",
       "off_direction",
-      "zone"
+      "zone",
+      "zone_dir"
     ];
     const rows = gazeTimeline.map(s =>
-      [pid, s.task, s.ms, s.x, s.y, s.on, s.dir, s.zone].join(",")
+      [
+        pid,
+        s.task,
+        s.ms,
+        s.x,
+        s.y,
+        s.on,
+        s.dir,
+        s.zone,
+        s.zoneDir
+      ].join(",")
     );
     return head.join(",") + "\n" + rows.join("\n");
   }
 
+  // ======================= WebGazer + כיול =======================
   function startWebgazerAndCalibration(){
     if (!window.webgazer){
       alert("ספריית WebGazer לא נטענה. ניתן להמשיך עם המשימה בלי מעקב עיניים.");
@@ -512,15 +559,20 @@
     return Math.hypot(p.x-projX, p.y-projY);
   }
 
-  // ---- נקודות רק באזור 2/3 המרכזי ----
+  // ======================= יצירת נקודות – רק באזור המשימה =======================
   function generatePoints(n){
-    const rect = canvas.getBoundingClientRect();
-    const marginX = rect.width / 6;
-    const marginY = rect.height / 6;
-    const left = marginX;
-    const top  = marginY;
-    const W = rect.width  - 2 * marginX;
-    const H = rect.height - 2 * marginY;
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+
+    // מסגרת המשימה (כמו בציור)
+    const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
+    const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
+
+    // אזור נקודות פנימי – קצת בתוך המסגרת
+    const left = frameMarginX + POINT_INNER_PADDING;
+    const top  = frameMarginY + POINT_INNER_PADDING;
+    const W = w - 2 * (frameMarginX + POINT_INNER_PADDING);
+    const H = h - 2 * (frameMarginY + POINT_INNER_PADDING);
 
     const pts = [];
     let attempts = 0;
@@ -571,6 +623,7 @@
     draw();
   }
 
+  // ======================= כיול – 17 נקודות =======================
   function generateCalibrationPoints(count){
     const rect = canvas.getBoundingClientRect();
     const m = 30;
@@ -651,17 +704,24 @@
     };
   }
 
+  // ======================= ציור =======================
   function draw(){
     ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
 
-    // מסגרת לבנה (האזור שבו הנבדק חושב שהמשימה נמצאת)
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
-    const marginX = w / 6;
-    const marginY = h / 6;
+    const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
+    const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
+
+    // מסגרת לבנה – גבול המשימה (T)
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 1.2;
-    ctx.strokeRect(marginX, marginY, w - 2*marginX, h - 2*marginY);
+    ctx.strokeRect(
+      frameMarginX,
+      frameMarginY,
+      w - 2*frameMarginX,
+      h - 2*frameMarginY
+    );
 
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
@@ -728,6 +788,7 @@
     });
   }
 
+  // ======================= אינטראקציה עם הנקודות =======================
   function hitTest(x,y){
     if (!currentTask) return -1;
     const pts = currentTask.points;
@@ -757,7 +818,7 @@
   function handlePointerDown(ev){
     if (calibrationActive){
       handleCalibrationClick(ev);
-      return;
+    return;
     }
     if (!running || !currentTask || pendingNextTaskPoints !== null) return;
 
@@ -797,6 +858,7 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
+  // ======================= לוג משימות =======================
   function sendTaskToLogForm(row){
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
@@ -848,6 +910,7 @@
     };
   }
 
+  // ======================= ניהול סשן =======================
   function tick(){
     if (!running) return;
     const elapsedSec = (now() - sessionStart) / 1000;
@@ -968,6 +1031,7 @@
     startSession();
   }
 
+  // ======================= Init =======================
   const urlPid = getPidFromUrl();
   if (urlPid){
     pidInput.value = urlPid;
