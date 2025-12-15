@@ -65,6 +65,7 @@
       padding:6px 14px;
       cursor:pointer;
       font-size:0.9rem;
+      white-space:nowrap;
     }
     button:disabled{
       opacity:0.4;
@@ -100,13 +101,10 @@
       border-radius:16px;
       border:1px solid #1f2937;
       padding:20px 24px;
-      max-width:420px;
+      max-width:520px;
       text-align:center;
     }
-    #overlay h2{
-      margin-top:0;
-      margin-bottom:8px;
-    }
+    #overlay h2{ margin-top:0; margin-bottom:8px; }
     .muted{color:var(--muted);}
   </style>
 
@@ -118,11 +116,16 @@
       <div class="muted">
         המשימה תימשך עד <b>10 דקות</b> או עד לחיצה על "סיום מוקדם".
       </div>
+
       <div class="controls">
         <label for="pid">מזהה נבדק:</label>
         <input id="pid" type="text" placeholder="לדוגמה ABC123" />
+
         <button id="startBtn" disabled>התחל משימה</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
+
+        <button id="flipBtn" type="button" disabled>היפוך ימין/שמאל: OFF</button>
+        <button id="centerBtn" type="button" disabled>כייל מרכז</button>
       </div>
     </div>
   </header>
@@ -158,16 +161,20 @@
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // ======================= הגדרות "רגישות" לכיוון =======================
+  // ======================= יציבות/רגישות =======================
   // OFF אמיתי – זמן מינימלי מחוץ ל-T
   const OFF_MIN_MS = 900;
 
-  // Majority vote לקביעת כיוון יציב
-  const DIR_WINDOW_MS = 400;
+  // Majority vote לכיוון יציב
+  const DIR_WINDOW_MS = 450;
   const DIR_MIN_VOTES = 8;
 
-  // Dead-zone סביב מרכז אזור המשימה: מונע סיווג רעש (מומלץ 0.18–0.30)
-  const DIR_DEADZONE_RATIO = 0.26;
+  // Dead-zone סביב מרכז אזור המשימה: מונע סיווג רעש (מומלץ 0.22–0.32)
+  const DIR_DEADZONE_RATIO = 0.28;
+
+  // סינון קפיצות (EMA) + חסימת outliers
+  const SMOOTH_ALPHA = 0.18;       // 0.12–0.25 טוב לרוב
+  const MAX_JUMP_PX = 220;         // חסימת קפיצה חריגה בין דגימות (בפיקסלים)
 
   // Debug overlay על הקנבס
   const DEBUG_DRAW = true;
@@ -220,6 +227,9 @@
   const pidInput = document.getElementById("pid");
   const startBtn = document.getElementById("startBtn");
   const endBtn = document.getElementById("endBtn");
+  const flipBtn = document.getElementById("flipBtn");
+  const centerBtn = document.getElementById("centerBtn");
+
   const overlay = document.getElementById("overlay");
   const overlayTitle = document.getElementById("overlayTitle");
   const overlayText = document.getElementById("overlayText");
@@ -246,6 +256,86 @@
   // פריסת נקודות – נשמרת לכל משימה (לקובץ points_layout)
   const taskLayouts = [];
 
+  // ======================= תיקוני WebGazer =======================
+  let FLIP_X = false; // היפוך ימין/שמאל
+  const gazeFix = {
+    offsetX: 0,
+    offsetY: 0,
+    hasOffset: false,
+    smoothX: null,
+    smoothY: null,
+    lastX: null,
+    lastY: null
+  };
+
+  function getScreenSize(){
+    return { w: window.innerWidth, h: window.innerHeight };
+  }
+
+  function applyFixes(rawX, rawY){
+    if (rawX == null || rawY == null) return { x:null, y:null };
+
+    let x = rawX;
+    let y = rawY;
+
+    // 1) היפוך X (mirror)
+    if (FLIP_X){
+      const { w } = getScreenSize();
+      x = w - x;
+    }
+
+    // 2) offset (אחרי כייל מרכז)
+    if (gazeFix.hasOffset){
+      x += gazeFix.offsetX;
+      y += gazeFix.offsetY;
+    }
+
+    // 3) חסימת קפיצה חריגה
+    if (gazeFix.lastX != null && gazeFix.lastY != null){
+      const d = Math.hypot(x - gazeFix.lastX, y - gazeFix.lastY);
+      if (d > MAX_JUMP_PX){
+        // מתעלמים מהדגימה החריגה וחוזרים לאחרונה
+        x = gazeFix.lastX;
+        y = gazeFix.lastY;
+      }
+    }
+    gazeFix.lastX = x;
+    gazeFix.lastY = y;
+
+    // 4) EMA smoothing
+    if (gazeFix.smoothX == null){
+      gazeFix.smoothX = x;
+      gazeFix.smoothY = y;
+    } else {
+      gazeFix.smoothX = gazeFix.smoothX + SMOOTH_ALPHA * (x - gazeFix.smoothX);
+      gazeFix.smoothY = gazeFix.smoothY + SMOOTH_ALPHA * (y - gazeFix.smoothY);
+    }
+
+    return { x: gazeFix.smoothX, y: gazeFix.smoothY };
+  }
+
+  function calibrateCenterOffset(){
+    // מסתכלים למרכז הקנבס ולוחצים "כייל מרכז"
+    // אנחנו לוקחים את הנקודה המסוננת האחרונה, ומשווים למרכז innerRect
+    const lastX = gazeFix.smoothX;
+    const lastY = gazeFix.smoothY;
+    if (lastX == null || lastY == null){
+      alert("אין עדיין נקודת מבט יציבה. תסתכל על המסך עוד רגע ונסה שוב.");
+      return;
+    }
+
+    const { innerRect } = getZoneRects();
+    const cx = (innerRect.left + innerRect.right) / 2;
+    const cy = (innerRect.top + innerRect.bottom) / 2;
+
+    // רוצים ש-last יתיישב על cx/cy
+    gazeFix.offsetX = (cx - lastX);
+    gazeFix.offsetY = (cy - lastY);
+    gazeFix.hasOffset = true;
+
+    alert("כיילתי Offset. עכשיו בדוק שוב שמאלה/ימינה/למעלה/למטה.");
+  }
+
   // ======================= סטטיסטיקות מעקב עיניים =======================
   const gazeStats = {
     hasStarted: false,
@@ -265,7 +355,6 @@
     timeDeviationMs: 0
   };
 
-  // OFF state + majority vote
   const offState = {
     candidate: false,
     candidateStart: null,
@@ -275,15 +364,7 @@
     votesStart: null
   };
 
-  // דיבוג: נקודה אחרונה
-  const dbg = {
-    x: null,
-    y: null,
-    zone: "O",
-    dir: ""
-  };
-
-  // כל הדגימות לקובץ ה-timeline
+  const dbg = { x:null, y:null, zone:"O", dir:"" };
   const gazeTimeline = [];
 
   function resetGazeStats(){
@@ -312,10 +393,13 @@
 
     gazeTimeline.length = 0;
 
-    dbg.x = null; dbg.y = null; dbg.zone = "O"; dbg.dir = "";
+    dbg.x=null; dbg.y=null; dbg.zone="O"; dbg.dir="";
+
+    gazeFix.smoothX=null; gazeFix.smoothY=null;
+    gazeFix.lastX=null; gazeFix.lastY=null;
   }
 
-  // ======================= אזורים על המסך =======================
+  // ======================= אזורים =======================
   function getZoneRects(){
     const rect = canvas.getBoundingClientRect();
     const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
@@ -329,12 +413,6 @@
     return { canvasRect: rect, innerRect };
   }
 
-  /*
-    סיווג חדש (מובהק יותר):
-    - T: בתוך innerRect
-    - מחוץ ל-T אבל בתוך הקנבס: L/R/U/D לפי הווקטור מהמרכז של innerRect + Dead-zone
-    - מחוץ לקנבס או בלי נקודה: O
-  */
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
 
@@ -350,7 +428,6 @@
       y >= innerRect.top  && y <= innerRect.bottom;
     if (inInner) return "T";
 
-    // מרכז אזור המשימה
     const cx = (innerRect.left + innerRect.right) / 2;
     const cy = (innerRect.top + innerRect.bottom) / 2;
 
@@ -360,12 +437,10 @@
     const deadX = (innerRect.right - innerRect.left) * DIR_DEADZONE_RATIO;
     const deadY = (innerRect.bottom - innerRect.top) * DIR_DEADZONE_RATIO;
 
-    // Dead-zone: אם לא יצא מובהק מהמרכז — נחשב כ-O כדי לא לסווג רעש
     if (Math.abs(dx) < deadX && Math.abs(dy) < deadY){
       return "O";
     }
 
-    // דומיננטי: אם dx חזק יותר => ימין/שמאל, אחרת למעלה/למטה
     if (Math.abs(dx) >= Math.abs(dy)){
       return dx >= 0 ? "R" : "L";
     } else {
@@ -379,18 +454,23 @@
 
     const t = elapsedTime;
     const hadRaw = !!data;
-    const sampleX = hadRaw ? data.x : null;
-    const sampleY = hadRaw ? data.y : null;
+
+    // raw coords
+    const rawX = hadRaw ? data.x : null;
+    const rawY = hadRaw ? data.y : null;
+
+    // apply flip/offset/smoothing
+    const fixed = hadRaw ? applyFixes(rawX, rawY) : {x:null,y:null};
+    const sampleX = fixed.x;
+    const sampleY = fixed.y;
 
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
     const onFlag = (zoneNow === "T") ? 1 : 0;
 
-    // Debug state
     dbg.x = (hadRaw && zoneNow !== "O") ? sampleX : null;
     dbg.y = (hadRaw && zoneNow !== "O") ? sampleY : null;
     dbg.zone = zoneNow;
 
-    // ---- צבירת זמנים לפי interval קודם ----
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
@@ -414,9 +494,8 @@
       else        gazeStats.invalidSamples++;
     }
 
-    // ---- OFF logic ----
+    // OFF logic
     if (onFlag === 1){
-      // חזרה ל-T => איפוס
       if (offState.candidate || offState.inOff || offState.votesStart != null){
         offState.candidate = false;
         offState.candidateStart = null;
@@ -426,7 +505,6 @@
         offState.votesStart = null;
       }
     } else {
-      // יציאה חדשה רק אם קודם היינו בתוך T
       if (gazeStats.lastZone === "T" && !offState.candidate){
         offState.candidate = true;
         offState.candidateStart = t;
@@ -436,13 +514,11 @@
         offState.votesStart = t;
       }
 
-      // צבירת קולות לכיוון רק אם zoneNow הוא כיוון
       if (zoneNow === "L") offState.votes.L++;
       else if (zoneNow === "R") offState.votes.R++;
       else if (zoneNow === "U") offState.votes.U++;
       else if (zoneNow === "D") offState.votes.D++;
 
-      // אחת ל-DIR_WINDOW_MS: קובעים כיוון לפי רוב
       if (offState.votesStart != null && (t - offState.votesStart) >= DIR_WINDOW_MS){
         const arr = [
           ["L", offState.votes.L],
@@ -459,7 +535,6 @@
         offState.votesStart = t;
       }
 
-      // OFF "אמיתי" רק אחרי OFF_MIN_MS + רק אם כבר יש כיוון יציב
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
@@ -481,7 +556,6 @@
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
 
-    // X/Y נשמרים רק כשיש נקודה בתוך הקנבס (לא O)
     let xOut = "";
     let yOut = "";
     if (hadRaw && zoneNow !== "O"){
@@ -489,7 +563,6 @@
       yOut = Math.round(sampleY);
     }
 
-    // בטיימליין נרשום כיוון רק כשהוא יציב (מקטין רעש)
     let dirSample = "";
     if (onFlag === 0 && offState.dir){
       dirSample = offState.dir;
@@ -506,7 +579,7 @@
     });
 
     gazeStats.lastZone = zoneNow;
-    draw(); // כדי לראות debug overlay בזמן אמת
+    draw();
   }
 
   function buildEyeCsv(){
@@ -559,16 +632,7 @@
       "off_direction"
     ];
     const rows = gazeTimeline.map(s =>
-      [
-        pid,
-        s.task,
-        s.ms,
-        s.zone || "",
-        s.x,
-        s.y,
-        s.on,
-        s.dir
-      ].join(",")
+      [pid, s.task, s.ms, s.zone || "", s.x, s.y, s.on, s.dir].join(",")
     );
     return head.join(",") + "\n" + rows.join("\n");
   }
@@ -761,8 +825,14 @@
       calibrationActive = false;
       isCalibrated = true;
       startBtn.disabled = false;
+      flipBtn.disabled = false;
+      centerBtn.disabled = false;
+
       overlayTitle.textContent = "המערכת מכויילת";
-      overlayText.textContent = "המערכת מכויילת. אנא לחץ על \"התחל המשימה\" כדי להתחיל את המשימה.";
+      overlayText.textContent =
+        "טיפ: אם שמאלה נראה כמו ימינה — לחץ על 'היפוך ימין/שמאל'.\n" +
+        "אחר כך הסתכל על מרכז אזור המשימה ולחץ 'כייל מרכז'.\n" +
+        "לבסוף לחץ 'התחל המשימה'.";
       overlayContinue.textContent = "התחל המשימה";
       overlay.style.display = "grid";
       overlayContinue.onclick = () => {
@@ -802,8 +872,9 @@
     const innerW = w - 2*frameMarginX;
     const innerH = h - 2*frameMarginY;
 
-    // innerRect outline
     ctx.save();
+
+    // innerRect outline
     ctx.strokeStyle = "rgba(96,165,250,0.7)";
     ctx.lineWidth = 1;
     ctx.strokeRect(innerX, innerY, innerW, innerH);
@@ -811,7 +882,7 @@
     // center cross
     const cx = innerX + innerW/2;
     const cy = innerY + innerH/2;
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.strokeStyle = "rgba(255,255,255,0.30)";
     ctx.beginPath();
     ctx.moveTo(cx, innerY); ctx.lineTo(cx, innerY+innerH);
     ctx.moveTo(innerX, cy); ctx.lineTo(innerX+innerW, cy);
@@ -828,7 +899,6 @@
       const rect = canvas.getBoundingClientRect();
       const gx = dbg.x - rect.left;
       const gy = dbg.y - rect.top;
-
       ctx.fillStyle = "rgba(244,63,94,0.9)";
       ctx.beginPath();
       ctx.arc(gx, gy, 5, 0, Math.PI*2);
@@ -840,7 +910,9 @@
     ctx.font = "12px system-ui, Arial";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
-    ctx.fillText(`zone=${dbg.zone}  dir=${dbg.dir || "-"}`, 12, 12);
+    const offTxt = gazeFix.hasOffset ? `offset=(${Math.round(gazeFix.offsetX)},${Math.round(gazeFix.offsetY)})` : "offset=none";
+    ctx.fillText(`zone=${dbg.zone} dir=${dbg.dir||"-"} flipX=${FLIP_X?"ON":"OFF"} ${offTxt}`, 12, 12);
+
     ctx.restore();
   }
 
@@ -868,7 +940,6 @@
     }
 
     if (!currentTask){
-      // גם בלי משימה — אפשר עדיין להראות debug overlay
       drawDebugOverlay();
       return;
     }
@@ -879,7 +950,7 @@
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
-    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.strokeStyle = "rgba(255,255,255,0.25)";
     ctx.lineWidth = 1.2;
     ctx.strokeRect(frameMarginX, frameMarginY, w-2*frameMarginX, h-2*frameMarginY);
 
@@ -1101,6 +1172,16 @@
     window.location.href = target;
   }
 
+  function buildEyeTimelineCsv(){
+    const pid = (pidInput.value || "").trim();
+    if (!gazeTimeline.length) return "";
+    const head = ["pid","task_index","ms","zone","x","y","on_screen","off_direction"];
+    const rows = gazeTimeline.map(s =>
+      [pid, s.task, s.ms, s.zone || "", s.x, s.y, s.on, s.dir].join(",")
+    );
+    return head.join(",") + "\n" + rows.join("\n");
+  }
+
   function endSession(autoEnded){
     if (sessionEnded){
       redirectToForm();
@@ -1116,13 +1197,10 @@
 
     const csv = buildCsv();
     if (csv) sendCsvToDrive(csv, "connect_the_dots_tasks");
-
     const eyeCsv = buildEyeCsv();
     if (eyeCsv) sendCsvToDrive(eyeCsv, "webgazer_eye_summary");
-
     const eyeTimelineCsv = buildEyeTimelineCsv();
     if (eyeTimelineCsv) sendCsvToDrive(eyeTimelineCsv, "webgazer_eye_timeline");
-
     const layoutCsv = buildPointsLayoutCsv();
     if (layoutCsv) sendCsvToDrive(layoutCsv, "points_layout");
 
@@ -1165,28 +1243,41 @@
     tickId = setInterval(tick, 500);
   }
 
-  function handleEndClick(){ endSession(false); }
-
-  function handleStartClick(){
-    if (!isCalibrated){
-      showCalibrationIntro();
-      return;
-    }
-    startSession();
-  }
-
   // ======================= Init =======================
+  function resizeAndDraw(){ resizeCanvas(); }
+
   const urlPid = getPidFromUrl();
   if (urlPid){
     pidInput.value = urlPid;
     pidInput.readOnly = true;
   }
 
-  window.addEventListener("resize", resizeCanvas);
+  flipBtn.addEventListener("click", () => {
+    FLIP_X = !FLIP_X;
+    flipBtn.textContent = `היפוך ימין/שמאל: ${FLIP_X ? "ON" : "OFF"}`;
+    // איפוס smoothing כדי שלא "ימשיך" נקודה ישנה
+    gazeFix.smoothX = null; gazeFix.smoothY = null;
+    gazeFix.lastX = null; gazeFix.lastY = null;
+    draw();
+  });
+
+  centerBtn.addEventListener("click", () => {
+    calibrateCenterOffset();
+    draw();
+  });
+
+  window.addEventListener("resize", resizeAndDraw);
   resizeCanvas();
 
-  startBtn.addEventListener("click", handleStartClick);
-  endBtn.addEventListener("click", handleEndClick);
+  startBtn.addEventListener("click", () => {
+    if (!isCalibrated){
+      showCalibrationIntro();
+      return;
+    }
+    startSession();
+  });
+
+  endBtn.addEventListener("click", () => endSession(false));
 
   showCalibrationIntro();
 })();
