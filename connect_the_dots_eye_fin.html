@@ -120,9 +120,7 @@
         <button id="startBtn" disabled>התחל משימה</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
 
-        <!-- בינתיים נשאיר אצלך כלי בדיקה -->
         <button id="flipBtn" type="button" disabled>היפוך ימין/שמאל: OFF</button>
-        <button id="recenterBtn" type="button" disabled>כייל מרכז (0.8s)</button>
       </div>
     </div>
   </header>
@@ -154,7 +152,7 @@
     lineAvoidDistance: 16
   };
 
-  // פרופורציות אזור המשימה (מלבן פנימי)
+  // אזור המשימה
   const FRAME_MARGIN_X_RATIO = 0.06;
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
@@ -162,23 +160,20 @@
   // ======================= יציבות/רגישות =======================
   const OFF_MIN_MS = 900;
 
-  // Majority vote לכיוון יציב
   const DIR_WINDOW_MS = 450;
   const DIR_MIN_VOTES = 8;
 
-  // Dead-zone סביב מרכז אזור המשימה (מקטין רעש)
   const DIR_DEADZONE_RATIO = 0.28;
 
-  // smoothing + חסימת קפיצות
-  const SMOOTH_ALPHA = 0.18;   // 0.12 = יותר חלק, 0.22 = יותר תגובתי
-  const MAX_JUMP_PX = 220;     // 140–260
+  const SMOOTH_ALPHA = 0.18;
+  const MAX_JUMP_PX = 220;
 
-  // כיול מרכז אוטומטי בסוף כיול
-  const AUTO_CENTER_MS = 800;
-  const AUTO_CENTER_STEP_MS = 30;
-  const AUTO_CENTER_MIN_SAMPLES = 10;
+  // --- NEW: נקודת מרכז "18" למשך 5 שניות ---
+  const CENTER_HOLD_MS = 5000;          // אפשר לשנות ל-3000 אם תרצה
+  const CENTER_SAMPLE_STEP_MS = 30;
+  const CENTER_MIN_SAMPLES = 12;        // מינימום דגימות כדי לקבע offset
 
-  // ציור נקודה אדומה + טקסט סטטוס
+  // ציור נקודת gaze אדומה + סטטוס
   const DRAW_GAZE_DOT = true;
 
   // ======================= שליחה ל־Drive =======================
@@ -232,7 +227,6 @@
   const endBtn = document.getElementById("endBtn");
 
   const flipBtn = document.getElementById("flipBtn");
-  const recenterBtn = document.getElementById("recenterBtn");
 
   const overlay = document.getElementById("overlay");
   const overlayTitle = document.getElementById("overlayTitle");
@@ -252,12 +246,17 @@
 
   // כיול
   let isCalibrated = false;
-  const CALIB_POINTS_TOTAL = 17;
+  const CALIB_POINTS_TOTAL = 17; // עדיין 17 קליקים רגילים
   let calibrationActive = false;
   let calibrationPoints = [];
   let calibrationIndex = 0;
 
-  // פריסת נקודות – נשמרת לכל משימה (לקובץ points_layout)
+  // --- NEW: שלב החזקת נקודת מרכז ---
+  let centerHoldActive = false;
+  let centerHoldStart = null;
+  let centerSamples = [];
+
+  // פריסת נקודות למשימות
   const taskLayouts = [];
 
   // ======================= תיקוני WebGazer =======================
@@ -279,19 +278,16 @@
     if (rawX == null || rawY == null) return { x:null, y:null };
     let x = rawX, y = rawY;
 
-    // flip X if needed
     if (FLIP_X){
       const { w } = getScreenSize();
       x = w - x;
     }
 
-    // offset
     if (gazeFix.hasOffset){
       x += gazeFix.offsetX;
       y += gazeFix.offsetY;
     }
 
-    // clamp outlier jumps
     if (gazeFix.lastX != null && gazeFix.lastY != null){
       const d = Math.hypot(x - gazeFix.lastX, y - gazeFix.lastY);
       if (d > MAX_JUMP_PX){
@@ -302,7 +298,6 @@
     gazeFix.lastX = x;
     gazeFix.lastY = y;
 
-    // EMA smoothing
     if (gazeFix.smoothX == null){
       gazeFix.smoothX = x;
       gazeFix.smoothY = y;
@@ -313,43 +308,60 @@
     return { x: gazeFix.smoothX, y: gazeFix.smoothY };
   }
 
-  async function calibrateCenterOffsetAvg(durationMs = AUTO_CENTER_MS){
-    if (!window.webgazer || !webgazer.getCurrentPrediction) return false;
+  function resetSmoothing(){
+    gazeFix.smoothX = null; gazeFix.smoothY = null;
+    gazeFix.lastX = null;   gazeFix.lastY = null;
+  }
 
-    const { innerRect } = getZoneRects();
+  function getZoneRects(){
+    const rect = canvas.getBoundingClientRect();
+    const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
+    const marginY = Math.max(rect.height * FRAME_MARGIN_Y_RATIO, 40);
+    const innerRect = {
+      left:   rect.left + marginX,
+      right:  rect.right - marginX,
+      top:    rect.top  + marginY,
+      bottom: rect.bottom - marginY
+    };
+    return { canvasRect: rect, innerRect, marginX, marginY };
+  }
+
+  // zone:
+  // T=inside task innerRect
+  // L/R/U/D = inside canvas but outside task, direction from center (with deadzone)
+  // O = outside canvas OR missing sample OR near-center noise
+  function classifyZone(hadRaw, x, y){
+    if (!hadRaw || x == null || y == null) return "O";
+
+    const { canvasRect, innerRect } = getZoneRects();
+    const inCanvas =
+      x >= canvasRect.left && x <= canvasRect.right &&
+      y >= canvasRect.top  && y <= canvasRect.bottom;
+    if (!inCanvas) return "O";
+
+    const inTask =
+      x >= innerRect.left && x <= innerRect.right &&
+      y >= innerRect.top  && y <= innerRect.bottom;
+    if (inTask) return "T";
+
     const cx = (innerRect.left + innerRect.right) / 2;
     const cy = (innerRect.top  + innerRect.bottom) / 2;
 
-    const samples = [];
-    const start = performance.now();
+    const dx = x - cx;
+    const dy = y - cy;
 
-    while (performance.now() - start < durationMs){
-      const p = await webgazer.getCurrentPrediction();
-      if (p && Number.isFinite(p.x) && Number.isFinite(p.y)){
-        let px = p.x, py = p.y;
-        if (FLIP_X){
-          const { w } = getScreenSize();
-          px = w - px;
-        }
-        samples.push({x:px, y:py});
-      }
-      await new Promise(r => setTimeout(r, AUTO_CENTER_STEP_MS));
+    const deadX = (innerRect.right - innerRect.left) * DIR_DEADZONE_RATIO;
+    const deadY = (innerRect.bottom - innerRect.top) * DIR_DEADZONE_RATIO;
+
+    if (Math.abs(dx) < deadX && Math.abs(dy) < deadY){
+      return "O";
     }
 
-    if (samples.length < AUTO_CENTER_MIN_SAMPLES) return false;
-
-    const mx = samples.reduce((a,s)=>a+s.x,0)/samples.length;
-    const my = samples.reduce((a,s)=>a+s.y,0)/samples.length;
-
-    gazeFix.offsetX = (cx - mx);
-    gazeFix.offsetY = (cy - my);
-    gazeFix.hasOffset = true;
-
-    // reset smoothing after new offset
-    gazeFix.smoothX = null; gazeFix.smoothY = null;
-    gazeFix.lastX = null;   gazeFix.lastY = null;
-
-    return true;
+    if (Math.abs(dx) >= Math.abs(dy)){
+      return dx >= 0 ? "R" : "L";
+    } else {
+      return dy >= 0 ? "D" : "U";
+    }
   }
 
   // ======================= סטטיסטיקות/טיימליין =======================
@@ -419,60 +431,7 @@
     dbg.zone="O"; dbg.dir="";
     dbg.rawX=null; dbg.rawY=null;
 
-    gazeFix.smoothX=null; gazeFix.smoothY=null;
-    gazeFix.lastX=null;   gazeFix.lastY=null;
-  }
-
-  // ======================= אזורים =======================
-  function getZoneRects(){
-    const rect = canvas.getBoundingClientRect();
-    const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
-    const marginY = Math.max(rect.height * FRAME_MARGIN_Y_RATIO, 40);
-    const innerRect = {
-      left:   rect.left + marginX,
-      right:  rect.right - marginX,
-      top:    rect.top  + marginY,
-      bottom: rect.bottom - marginY
-    };
-    return { canvasRect: rect, innerRect, marginX, marginY };
-  }
-
-  // zone:
-  // T=inside task innerRect
-  // L/R/U/D = inside canvas but outside task, direction from center (with deadzone)
-  // O = outside canvas OR missing sample OR near-center noise
-  function classifyZone(hadRaw, x, y){
-    if (!hadRaw || x == null || y == null) return "O";
-
-    const { canvasRect, innerRect } = getZoneRects();
-    const inCanvas =
-      x >= canvasRect.left && x <= canvasRect.right &&
-      y >= canvasRect.top  && y <= canvasRect.bottom;
-    if (!inCanvas) return "O";
-
-    const inTask =
-      x >= innerRect.left && x <= innerRect.right &&
-      y >= innerRect.top  && y <= innerRect.bottom;
-    if (inTask) return "T";
-
-    const cx = (innerRect.left + innerRect.right) / 2;
-    const cy = (innerRect.top  + innerRect.bottom) / 2;
-
-    const dx = x - cx;
-    const dy = y - cy;
-
-    const deadX = (innerRect.right - innerRect.left) * DIR_DEADZONE_RATIO;
-    const deadY = (innerRect.bottom - innerRect.top) * DIR_DEADZONE_RATIO;
-
-    if (Math.abs(dx) < deadX && Math.abs(dy) < deadY){
-      return "O";
-    }
-
-    if (Math.abs(dx) >= Math.abs(dy)){
-      return dx >= 0 ? "R" : "L";
-    } else {
-      return dy >= 0 ? "D" : "U";
-    }
+    resetSmoothing();
   }
 
   // ======================= ציור =======================
@@ -481,14 +440,14 @@
 
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
-
-    // מסגרת אזור המשימה (כדי שתדע איפה T נגמר)
     const { marginX, marginY } = getZoneRects();
+
+    // מסגרת אזור המשימה
     ctx.strokeStyle = "rgba(255,255,255,0.20)";
     ctx.lineWidth = 1.2;
     ctx.strokeRect(marginX, marginY, w - 2*marginX, h - 2*marginY);
 
-    // נקודת מבט – screen -> canvas coords
+    // נקודת gaze
     if (dbg.x != null && dbg.y != null){
       const rect = canvas.getBoundingClientRect();
       const gx = dbg.x - rect.left;
@@ -512,7 +471,7 @@
   function draw(){
     ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
 
-    // כיול – מציירים רק נקודה אדומה של הכיול + טקסט
+    // בזמן כיול "קליקים" – מציירים נקודת כיול רגילה
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -524,17 +483,40 @@
       ctx.font = "14px system-ui, Arial";
       ctx.textAlign = "center";
       ctx.textBaseline = "top";
-      ctx.fillText(
-        `נקודה ${calibrationIndex+1} מתוך ${calibrationPoints.length} – לחץ על הנקודה האדומה`,
-        p.x,
-        p.y + 18
-      );
-      // בזמן כיול עדיין נציג את נקודת ה-gaze האדומה (אם קיימת) כדי שתראה את הקפיצות
+      ctx.fillText(`נקודה ${calibrationIndex+1} מתוך ${calibrationPoints.length} – לחץ על הנקודה האדומה`, p.x, p.y + 18);
+
       drawGazeDotAndStatus();
       return;
     }
 
-    // לפני תחילת משימה – עדיין נציג סטטוס + נקודה אדומה כדי שתוכל לבדוק
+    // NEW: בזמן נקודת מרכז 18 – מציירים נקודה במרכז + ספירה
+    if (centerHoldActive){
+      const { marginX, marginY } = getZoneRects();
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      const cx = marginX + (w - 2*marginX)/2;
+      const cy = marginY + (h - 2*marginY)/2;
+
+      ctx.fillStyle = "#ef4444";
+      ctx.beginPath();
+      ctx.arc(cx, cy, 14, 0, Math.PI*2);
+      ctx.fill();
+
+      const elapsed = performance.now() - centerHoldStart;
+      const leftMs = Math.max(0, CENTER_HOLD_MS - elapsed);
+      const leftSec = Math.ceil(leftMs/1000);
+
+      ctx.fillStyle = "#e5e7eb";
+      ctx.font = "14px system-ui, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      ctx.fillText(`נא להתמיד במבט על הנקודה במרכז (${leftSec})`, cx, cy + 20);
+
+      drawGazeDotAndStatus();
+      return;
+    }
+
+    // לפני משימה – עדיין נציג נקודת gaze כדי שתבדוק
     if (!currentTask){
       drawGazeDotAndStatus();
       return;
@@ -584,11 +566,10 @@
       }
     });
 
-    // מעל הכל – נקודת מבט/סטטוס
     drawGazeDotAndStatus();
   }
 
-  // ציור ב-RAF כדי לא לצייר יותר מדי פעמים בשנייה
+  // RAF ציור
   let drawQueued = false;
   function requestDraw(){
     if (drawQueued) return;
@@ -601,33 +582,36 @@
 
   // ======================= WebGazer listener =======================
   function handleGaze(data, elapsedTime){
-    if (sessionEnded) return; // גם אם לא running, עדיין נרצה לראות נקודה בזמן בדיקה/כיול
+    if (sessionEnded) return;
 
-    const t = elapsedTime;
     const hadRaw = !!data;
-
     const rawX = hadRaw ? data.x : null;
     const rawY = hadRaw ? data.y : null;
 
     dbg.rawX = rawX; dbg.rawY = rawY;
 
     const fixed = hadRaw ? applyFixes(rawX, rawY) : {x:null,y:null};
-    const sampleX = fixed.x;
-    const sampleY = fixed.y;
+    const x = fixed.x;
+    const y = fixed.y;
 
-    // נשמור ל-debug נקודה תמיד (גם אם לא running)
-    dbg.x = (hadRaw && sampleX != null && sampleY != null) ? sampleX : null;
-    dbg.y = (hadRaw && sampleX != null && sampleY != null) ? sampleY : null;
+    dbg.x = (hadRaw && x != null && y != null) ? x : null;
+    dbg.y = (hadRaw && x != null && y != null) ? y : null;
 
+    // NEW: אם אנחנו בשלב החזקת מרכז — נאסוף דגימות לטובת offset
+    if (centerHoldActive && hadRaw && x != null && y != null){
+      centerSamples.push({x, y});
+    }
+
+    // לוגיקה של zones/stats רק בזמן ריצה
     if (!running || !currentTask){
-      dbg.zone = classifyZone(hadRaw, sampleX, sampleY);
+      dbg.zone = classifyZone(hadRaw, x, y);
       requestDraw();
       return;
     }
 
-    const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
+    const t = elapsedTime;
+    const zoneNow = classifyZone(hadRaw, x, y);
     const onFlag = (zoneNow === "T") ? 1 : 0;
-
     dbg.zone = zoneNow;
 
     // stats
@@ -719,8 +703,8 @@
     let xOut = "";
     let yOut = "";
     if (hadRaw && zoneNow !== "O"){
-      xOut = Math.round(sampleX);
-      yOut = Math.round(sampleY);
+      xOut = Math.round(x);
+      yOut = Math.round(y);
     }
 
     let dirSample = "";
@@ -823,23 +807,154 @@
     setTimeout(startCalibrationSequence, 900);
   }
 
-  function getPidFromUrl(){
-    const params = new URLSearchParams(window.location.search);
-    return params.get("pid") || "";
+  function generateCalibrationPoints(count){
+    const rect = canvas.getBoundingClientRect();
+    const m = 30;
+    const W = Math.max(rect.width - 2*m, 220);
+    const H = Math.max(rect.height - 2*m, 220);
+    const pattern = [
+      [0.10,0.10],[0.50,0.10],[0.90,0.10],
+      [0.10,0.50],[0.50,0.50],[0.90,0.50],
+      [0.10,0.90],[0.50,0.90],[0.90,0.90],
+      [0.05,0.20],[0.95,0.20],[0.05,0.80],[0.95,0.80],
+      [0.20,0.05],[0.80,0.05],[0.20,0.95],[0.80,0.95]
+    ];
+    const needed = Math.min(count, pattern.length);
+    const pts = [];
+    for (let i=0; i<needed; i++){
+      const [nx,ny] = pattern[i];
+      pts.push({ x: m + nx*W, y: m + ny*H });
+    }
+    return pts;
   }
 
-  function now(){ return performance.now(); }
-
-  function resizeCanvas(){
-    const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.setTransform(dpr,0,0,dpr,0,0);
+  function startCalibrationSequence(){
+    calibrationPoints = generateCalibrationPoints(CALIB_POINTS_TOTAL);
+    calibrationIndex = 0;
+    calibrationActive = true;
     draw();
   }
 
-  // ======================= Tasks / points =======================
+  function handleCalibrationClick(ev){
+    if (!calibrationActive || !calibrationPoints.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+    const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    const current = calibrationPoints[calibrationIndex];
+    if (!current) return;
+    const d = Math.hypot(current.x - x, current.y - y);
+    if (d > 40) return;
+
+    try{
+      if (window.webgazer && webgazer.recordScreenPosition){
+        const vx = rect.left + current.x;
+        const vy = rect.top  + current.y;
+        webgazer.recordScreenPosition(vx, vy, "click");
+      }
+    } catch(e){}
+
+    calibrationIndex++;
+    if (calibrationIndex >= calibrationPoints.length){
+      calibrationActive = false;
+
+      // NEW: נקודה 18 במרכז למשך CENTER_HOLD_MS, בלי קליק.
+      startCenterHold();
+    } else {
+      draw();
+    }
+  }
+
+  function startCenterHold(){
+    centerHoldActive = true;
+    centerHoldStart = performance.now();
+    centerSamples = [];
+    resetSmoothing();
+
+    // נציג הודעה קצרה לפני שמתחילים את הספירה (שקופה לנבדק)
+    overlayTitle.textContent = "שלב אחרון בכיול";
+    overlayText.textContent = "כעת עליך להתמיד במבט על הנקודה במרכז למשך מספר שניות (בלי להזיז את הראש).";
+    overlayContinue.textContent = "התחל";
+    overlay.style.display = "grid";
+
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+
+      const step = () => {
+        if (!centerHoldActive) return;
+
+        const elapsed = performance.now() - centerHoldStart;
+        requestDraw();
+
+        if (elapsed >= CENTER_HOLD_MS){
+          finalizeCenterHold();
+          return;
+        }
+        setTimeout(step, 50);
+      };
+
+      step();
+    };
+  }
+
+  function finalizeCenterHold(){
+    centerHoldActive = false;
+
+    // מחשבים offset מהממוצע של הדגימות שנאספו בזמן החזקת המרכז
+    if (centerSamples.length >= CENTER_MIN_SAMPLES){
+      const { innerRect } = getZoneRects();
+      const cx = (innerRect.left + innerRect.right) / 2;
+      const cy = (innerRect.top  + innerRect.bottom) / 2;
+
+      const mx = centerSamples.reduce((a,s)=>a+s.x,0) / centerSamples.length;
+      const my = centerSamples.reduce((a,s)=>a+s.y,0) / centerSamples.length;
+
+      gazeFix.offsetX = (cx - mx);
+      gazeFix.offsetY = (cy - my);
+      gazeFix.hasOffset = true;
+
+      resetSmoothing();
+    } else {
+      // לא מספיק דגימות — עדיין נסיים כיול, אבל נודיע לך
+      console.warn("Center hold: not enough samples", centerSamples.length);
+    }
+
+    isCalibrated = true;
+    startBtn.disabled = false;
+    flipBtn.disabled = false;
+
+    overlayTitle.textContent = "המערכת מכויילת";
+    overlayText.textContent =
+      centerSamples.length >= CENTER_MIN_SAMPLES
+        ? `הכיול הושלם + יישור מרכז. (samples=${centerSamples.length})`
+        : `הכיול הושלם, אבל לא נאספו מספיק דגימות ליישור מרכז. (samples=${centerSamples.length})`;
+    overlayContinue.textContent = "התחל המשימה";
+    overlay.style.display = "grid";
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+      startSession();
+    };
+
+    draw();
+  }
+
+  function showCalibrationIntro(){
+    overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים";
+    overlayText.textContent =
+      "יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.";
+    overlayContinue.textContent = "פתח מצלמה וכייל";
+    overlay.style.display = "grid";
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+      startWebgazerAndCalibration();
+    };
+  }
+
+  // ======================= משימות (Connect the dots) =======================
+  function now(){ return performance.now(); }
+
   function randomBetween(min,max){ return min + Math.random() * (max - min); }
 
   function pointToSegmentDistance(p,a,b){
@@ -923,109 +1038,6 @@
     draw();
   }
 
-  // ======================= Calibration =======================
-  function generateCalibrationPoints(count){
-    const rect = canvas.getBoundingClientRect();
-    const m = 30;
-    const W = Math.max(rect.width - 2*m, 220);
-    const H = Math.max(rect.height - 2*m, 220);
-    const pattern = [
-      [0.10,0.10],[0.50,0.10],[0.90,0.10],
-      [0.10,0.50],[0.50,0.50],[0.90,0.50],
-      [0.10,0.90],[0.50,0.90],[0.90,0.90],
-      [0.05,0.20],[0.95,0.20],[0.05,0.80],[0.95,0.80],
-      [0.20,0.05],[0.80,0.05],[0.20,0.95],[0.80,0.95]
-    ];
-    const needed = Math.min(count, pattern.length);
-    const pts = [];
-    for (let i=0; i<needed; i++){
-      const [nx,ny] = pattern[i];
-      pts.push({ x: m + nx*W, y: m + ny*H });
-    }
-    return pts;
-  }
-
-  function startCalibrationSequence(){
-    calibrationPoints = generateCalibrationPoints(CALIB_POINTS_TOTAL);
-    calibrationIndex = 0;
-    calibrationActive = true;
-    draw();
-  }
-
-  function handleCalibrationClick(ev){
-    if (!calibrationActive || !calibrationPoints.length) return;
-    const rect = canvas.getBoundingClientRect();
-    const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-    const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-
-    const current = calibrationPoints[calibrationIndex];
-    if (!current) return;
-    const d = Math.hypot(current.x - x, current.y - y);
-    if (d > 40) return;
-
-    try{
-      if (window.webgazer && webgazer.recordScreenPosition){
-        const vx = rect.left + current.x;
-        const vy = rect.top  + current.y;
-        webgazer.recordScreenPosition(vx, vy, "click");
-      }
-    } catch(e){}
-
-    calibrationIndex++;
-    if (calibrationIndex >= calibrationPoints.length){
-      calibrationActive = false;
-
-      // שלב קצר: הסתכל/י על מרכז אזור המשימה (כדי ליישר offset)
-      overlayTitle.textContent = "כמעט סיימנו כיול";
-      overlayText.textContent = "כעת הסתכל/י על מרכז אזור המשימה למשך שנייה אחת (בלי להזיז את הראש).";
-      overlayContinue.textContent = "הבנתי";
-      overlay.style.display = "grid";
-
-      overlayContinue.onclick = async () => {
-        overlay.style.display = "none";
-
-        // נמתין רגעון כדי שהמשתמש יתמקם
-        await new Promise(r => setTimeout(r, 250));
-        const ok = await calibrateCenterOffsetAvg(AUTO_CENTER_MS);
-
-        isCalibrated = true;
-        startBtn.disabled = false;
-        flipBtn.disabled = false;
-        recenterBtn.disabled = false;
-
-        overlayTitle.textContent = "המערכת מכויילת";
-        overlayText.textContent = ok
-          ? "המערכת מכויילת + יושר מרכז. עכשיו אפשר להתחיל."
-          : "המערכת מכויילת. (לא הצטברו מספיק דגימות ליישור מרכז — אפשר ללחוץ 'כייל מרכז' ידנית.)";
-        overlayContinue.textContent = "התחל המשימה";
-        overlay.style.display = "grid";
-        overlayContinue.onclick = () => {
-          overlay.style.display = "none";
-          startSession();
-        };
-        draw();
-      };
-
-    } else {
-      draw();
-    }
-  }
-
-  function showCalibrationIntro(){
-    overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים";
-    overlayText.textContent =
-      "יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות במקומות שונים – יש להביט בכל נקודה וללחוץ עליה.";
-    overlayContinue.textContent = "פתח מצלמה וכייל";
-    overlay.style.display = "grid";
-    overlayContinue.onclick = () => {
-      overlay.style.display = "none";
-      startWebgazerAndCalibration();
-    };
-  }
-
-  // ======================= Interaction with dots =======================
   function hitTest(x,y){
     if (!currentTask) return -1;
     const pts = currentTask.points;
@@ -1055,6 +1067,10 @@
   function handlePointerDown(ev){
     if (calibrationActive){
       handleCalibrationClick(ev);
+      return;
+    }
+    if (centerHoldActive){
+      // בזמן נקודת מרכז אין קליקים
       return;
     }
     if (!running || !currentTask || pendingNextTaskPoints !== null) return;
@@ -1095,7 +1111,7 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
-  // ======================= Task logging =======================
+  // ======================= לוג משימות =======================
   function sendTaskToLogForm(row){
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
@@ -1263,6 +1279,11 @@
   }
 
   // ======================= Init =======================
+  function getPidFromUrl(){
+    const params = new URLSearchParams(window.location.search);
+    return params.get("pid") || "";
+  }
+
   const urlPid = getPidFromUrl();
   if (urlPid){
     pidInput.value = urlPid;
@@ -1272,26 +1293,9 @@
   flipBtn.addEventListener("click", () => {
     FLIP_X = !FLIP_X;
     flipBtn.textContent = `היפוך ימין/שמאל: ${FLIP_X ? "ON" : "OFF"}`;
-    gazeFix.smoothX = null; gazeFix.smoothY = null;
-    gazeFix.lastX = null; gazeFix.lastY = null;
+    resetSmoothing();
     requestDraw();
   });
-
-  recenterBtn.addEventListener("click", async () => {
-    overlayTitle.textContent = "כייל מרכז";
-    overlayText.textContent = "הסתכל/י על מרכז אזור המשימה למשך שנייה (בלי להזיז ראש).";
-    overlayContinue.textContent = "התחל";
-    overlay.style.display = "grid";
-    overlayContinue.onclick = async () => {
-      overlay.style.display = "none";
-      await new Promise(r => setTimeout(r, 250));
-      const ok = await calibrateCenterOffsetAvg(AUTO_CENTER_MS);
-      alert(ok ? "כיילתי מרכז." : "לא הצטברו מספיק דגימות.");
-      requestDraw();
-    };
-  });
-
-  window.addEventListener("resize", () => { resizeCanvas(); });
 
   function resizeCanvas(){
     const rect = canvas.getBoundingClientRect();
@@ -1301,6 +1305,8 @@
     ctx.setTransform(dpr,0,0,dpr,0,0);
     draw();
   }
+
+  window.addEventListener("resize", () => { resizeCanvas(); });
 
   startBtn.addEventListener("click", () => {
     if (!isCalibrated){
@@ -1312,12 +1318,9 @@
 
   endBtn.addEventListener("click", () => endSession(false));
 
-  // הפעלת WebGazer + מסך פתיחה
+  // init
   resizeCanvas();
   showCalibrationIntro();
-
-  // enable buttons after calibration
-  // (startBtn enabled inside calibration completion)
 })();
 </script>
 </body>
