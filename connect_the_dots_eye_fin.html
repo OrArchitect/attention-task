@@ -120,7 +120,8 @@
       </div>
       <div class="controls">
         <label for="pid">מזהה נבדק:</label>
-        <input id="pid" type="text" placeholder="לדוגמה OR010125" />
+        <!-- ✅ שינוי placeholder -->
+        <input id="pid" type="text" placeholder="לדוגמה ABC123" />
         <button id="startBtn" disabled>התחל משימה</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
       </div>
@@ -393,7 +394,7 @@
 
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
 
-    // ✅ on-screen = בתוך אזור המשימה בלבד (T)
+    // on-screen = בתוך אזור המשימה בלבד (T)
     const onFlag = (zoneNow === "T") ? 1 : 0;
 
     // שמירת אזור סטייה אחרון (רק כיוונים)
@@ -455,7 +456,7 @@
         }
       }
 
-      // אישור OFF אחרי סף זמן
+      // אישור OFF אחרי סף זמן (לסטטיסטיקות)
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
@@ -475,7 +476,7 @@
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
 
-    // ✅ לשמור X/Y גם במסגרת (לא רק בתוך T), כדי שתוכל לנתח סטיות
+    // לשמור X/Y גם במסגרת (לא רק בתוך T)
     let xOut = "";
     let yOut = "";
     if (hadRaw && zoneNow !== "O"){
@@ -483,14 +484,16 @@
       yOut = Math.round(sampleY);
     }
 
+    // ✅ כיוון בריחה בטיימליין: כבר מהרגע שיוצאים מ-T
     let dirSample = "";
-    if (onFlag === 0 && offState.inOff && offState.dir){
-      dirSample = offState.dir;
+    if (onFlag === 0){
+      dirSample = offState.dir || (zoneNow === "U" || zoneNow === "D" || zoneNow === "L" || zoneNow === "R" ? zoneNow : "");
     }
 
     gazeTimeline.push({
       ms,
       task: taskIndex,
+      zone: zoneNow, // ✅ עמודה נוספת
       x: xOut,
       y: yOut,
       on: onFlag,
@@ -547,6 +550,7 @@
       "pid",
       "task_index",
       "ms",
+      "zone",          // ✅ חדש
       "x",
       "y",
       "on_screen",
@@ -557,6 +561,7 @@
         pid,
         s.task,
         s.ms,
+        s.zone || "",
         s.x,
         s.y,
         s.on,
