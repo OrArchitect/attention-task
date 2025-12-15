@@ -180,7 +180,7 @@
   let centerAttempts = 0;
   const MAX_CENTER_ATTEMPTS = 2;
 
-  // שלב בדיקת ציר X (ימין/שמאל)
+  // שלב בדיקת X (ימין/שמאל) – עם נקודה ימנית/שמאלית
   const XCHECK_RIGHT_MS = 4000;
   const XCHECK_LEFT_MS  = 4000;
   const XCHECK_MIN_SAMPLES = 18;
@@ -292,7 +292,7 @@
     medBufY: []
   };
 
-  const dbg = { x:null, y:null, rawX:null, rawY:null };
+  const dbg = { x:null, y:null };
 
   function resetSmoothing(){
     gazeFix.smoothX = null;
@@ -331,7 +331,6 @@
       return { x: rawFixedX, y: rawFixedY, rawX: rawFixedX, rawY: rawFixedY };
     }
 
-    // smoothing for dot only
     gazeFix.medBufX.push(rawFixedX);
     gazeFix.medBufY.push(rawFixedY);
     if (gazeFix.medBufX.length > MEDIAN_WIN) gazeFix.medBufX.shift();
@@ -496,7 +495,7 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  // ======================= Drawing =======================
+  // ======================= Drawing helpers =======================
   function drawGazeDot(){
     if (!DRAW_GAZE_DOT) return;
     if (dbg.x == null || dbg.y == null) return;
@@ -512,6 +511,7 @@
   function draw(){
     ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
 
+    // -------- קליק-כיול 17 נקודות
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -529,6 +529,7 @@
       return;
     }
 
+    // -------- החזקת מרכז
     if (holdActive){
       const { marginX, marginY } = getZoneRects();
       const w = canvas.clientWidth;
@@ -543,7 +544,7 @@
 
       const elapsed = performance.now() - holdStart;
       const leftMs = Math.max(0, CENTER_HOLD_MS - elapsed);
-      const leftSec = Math.ceil(leftMs/1000);
+      const leftSec = Math.max(1, Math.ceil(leftMs/1000)); // <-- לא יראה 0
 
       ctx.fillStyle = "#e5e7eb";
       ctx.font = "14px system-ui, Arial";
@@ -555,22 +556,33 @@
       return;
     }
 
+    // -------- XCheck: נקודה ימינה/שמאלה בתוך המסגרת (לא במרכז!)
     if (xCheckActive){
       const { marginX, marginY } = getZoneRects();
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
-      const cx = marginX + (w - 2*marginX)/2;
-      const cy = marginY + (h - 2*marginY)/2;
+
+      const y = marginY + (h - 2*marginY)/2;
+
+      // נקודות בתוך הקנבס, מחוץ לאזור המשימה:
+      // בימין - בתוך המסגרת, ליד הקצה הימני
+      // בשמאל - בתוך המסגרת, ליד הקצה השמאלי
+      const xRight = w - Math.max(18, marginX * 0.45);
+      const xLeft  = Math.max(18, marginX * 0.45);
+
+      const targetX = (xCheckPhase === "right") ? xRight : xLeft;
 
       ctx.fillStyle = "#ef4444";
       ctx.beginPath();
-      ctx.arc(cx, cy, 14, 0, Math.PI*2);
+      ctx.arc(targetX, y, 14, 0, Math.PI*2);
       ctx.fill();
 
-      const elapsed = performance.now() - xCheckStart;
+      const nowT = performance.now();
+      const elapsed = nowT - xCheckStart;
       const total = (xCheckPhase === "right") ? XCHECK_RIGHT_MS : XCHECK_LEFT_MS;
+
       const leftMs = Math.max(0, total - elapsed);
-      const leftSec = Math.ceil(leftMs/1000);
+      const leftSec = Math.max(1, Math.ceil(leftMs/1000)); // <-- לא יראה 0
 
       ctx.fillStyle = "#e5e7eb";
       ctx.font = "14px system-ui, Arial";
@@ -578,10 +590,10 @@
       ctx.textBaseline = "top";
 
       const txt = (xCheckPhase === "right")
-        ? `כעת הבט ימינה למשך ${leftSec} שניות`
-        : `כעת הבט שמאלה למשך ${leftSec} שניות`;
+        ? `כעת הבט ימינה לנקודה למשך ${leftSec} שניות`
+        : `כעת הבט שמאלה לנקודה למשך ${leftSec} שניות`;
 
-      ctx.fillText(txt, cx, cy + 20);
+      ctx.fillText(txt, w/2, y + 24);
 
       drawGazeDot();
       return;
@@ -592,6 +604,7 @@
       return;
     }
 
+    // -------- ציור משימה רגיל
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
@@ -654,7 +667,7 @@
     requestAnimationFrame(()=>{ drawQueued=false; draw(); });
   }
 
-  // ======================= כיול מרכז (תיקון: לא נתקע) =======================
+  // ======================= כיול מרכז (לא נתקע) =======================
   function startCenterHold(){
     holdActive = true;
     holdStart = performance.now();
@@ -697,7 +710,6 @@
       overlayText.textContent =
         "ננסה שוב את כיול המרכז.\n" +
         "נא לשבת ישר, לא להזיז ראש, ולהתמקד בנקודה במרכז.";
-
       overlayContinue.textContent = "נסה שוב";
       overlay.style.display = "grid";
       overlayContinue.onclick = () => {
@@ -709,7 +721,7 @@
       return;
     }
 
-    // ממשיכים בכל מקרה (best-effort offset)
+    // Best-effort offset
     const { innerRect } = getZoneRects();
     const targetCx = (innerRect.left + innerRect.right) / 2;
     const targetCy = (innerRect.top  + innerRect.bottom) / 2;
@@ -722,7 +734,7 @@
     startXCheck();
   }
 
-  // ======================= בדיקת X (ימין/שמאל) =======================
+  // ======================= XCheck (ימין ואז שמאל) =======================
   function startXCheck(){
     xCheckActive = true;
     xCheckPhase = "right";
@@ -734,8 +746,8 @@
 
     const loop = () => {
       if (!xCheckActive) return;
-      const now = performance.now();
-      const elapsed = now - xCheckStart;
+      const nowT = performance.now();
+      const elapsed = nowT - xCheckStart;
       const total = (xCheckPhase === "right") ? XCHECK_RIGHT_MS : XCHECK_LEFT_MS;
 
       requestDraw();
@@ -743,7 +755,8 @@
       if (elapsed >= total){
         if (xCheckPhase === "right"){
           xCheckPhase = "left";
-          xCheckStart = performance.now();
+          xCheckStart = performance.now(); // חשוב
+          requestDraw();                   // חשוב: שלא יציג 0
         } else {
           xCheckActive = false;
           finalizeXCheck();
@@ -769,6 +782,7 @@
       return;
     }
 
+    // אם "ימין" יצא קטן מ"שמאל" -> ציר הפוך
     if (rx < lx){
       FLIP_X = !FLIP_X;
       resetSmoothing();
@@ -1012,7 +1026,8 @@
       overlayTitle.textContent = "שלב אחרון בכיול";
       overlayText.textContent =
         "כעת נא להתמיד במבט על הנקודה במרכז למשך 5 שניות (בלי להזיז ראש).\n" +
-        "אם יהיה ריצוד – ננסה עוד פעם אחת, ואז נמשיך בכל מקרה.";
+        "אם יהיה ריצוד – ננסה עוד פעם אחת, ואז נמשיך בכל מקרה.\n\n" +
+        "לאחר מכן: תופיע נקודה בצד ימין (4 שניות) ואז בצד שמאל (4 שניות).";
       overlayContinue.textContent = "התחל";
       overlay.style.display = "grid";
       overlayContinue.onclick = () => {
@@ -1030,7 +1045,7 @@
     overlayText.textContent =
       "יש לאשר פתיחת מצלמה.\n" +
       "לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.\n\n" +
-      "בסיום: נקודה במרכז ל־5 שניות ואז הבט ימינה 4 שניות ואז שמאלה 4 שניות.";
+      "בסיום: נקודה במרכז ל־5 שניות ואז נקודה בצד ימין 4 שניות ואז בצד שמאל 4 שניות.";
     overlayContinue.textContent = "פתח מצלמה וכייל";
     overlay.style.display = "grid";
     overlayContinue.onclick = () => {
@@ -1393,29 +1408,26 @@
     pidInput.readOnly = true;
   }
 
-  resizeCanvas();
-  showCalibrationIntro();
+  function showCalibrationIntroScreen(){
+    showCalibrationIntro();
+  }
+
+  function resizeAndIntro(){
+    resizeCanvas();
+    showCalibrationIntroScreen();
+  }
 
   startBtn.addEventListener("click", () => {
     if (!isCalibrated){
-      // התחלה דרך כיול
-      overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים";
-      overlayText.textContent =
-        "יש לאשר פתיחת מצלמה.\n" +
-        "לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.\n\n" +
-        "בסיום: נקודה במרכז ל־5 שניות ואז הבט ימינה 4 שניות ואז שמאלה 4 שניות.";
-      overlayContinue.textContent = "פתח מצלמה וכייל";
-      overlay.style.display = "grid";
-      overlayContinue.onclick = () => {
-        overlay.style.display = "none";
-        startWebgazerAndCalibration();
-      };
+      showCalibrationIntro();
       return;
     }
     startSession();
   });
 
   endBtn.addEventListener("click", () => endSession(false));
+
+  resizeAndIntro();
 })();
 </script>
 </body>
