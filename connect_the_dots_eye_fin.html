@@ -153,17 +153,24 @@
     lineAvoidDistance: 16
   };
 
-  // פרופורציות המסגרת כמו בשרטוט (מרווח בין הקנבס לאזור המשימה)
+  // פרופורציות אזור המשימה (מלבן פנימי)
   const FRAME_MARGIN_X_RATIO = 0.06;
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // OFF אמיתי – לפחות Xms מחוץ לשטח המשימה (T)
-  const OFF_MIN_MS = 700;      // ✅ הוגדל כדי להפחית false positives
+  // ======================= הגדרות "רגישות" לכיוון =======================
+  // OFF אמיתי – זמן מינימלי מחוץ ל-T
+  const OFF_MIN_MS = 900;
 
-  // "הצבעת רוב" לקביעת כיוון יציב
-  const DIR_WINDOW_MS = 350;   // ✅ חלון זמן לקביעת כיוון
-  const DIR_MIN_VOTES = 6;     // ✅ מינימום דגימות לאישור כיוון
+  // Majority vote לקביעת כיוון יציב
+  const DIR_WINDOW_MS = 400;
+  const DIR_MIN_VOTES = 8;
+
+  // Dead-zone סביב מרכז אזור המשימה: מונע סיווג רעש (מומלץ 0.18–0.30)
+  const DIR_DEADZONE_RATIO = 0.26;
+
+  // Debug overlay על הקנבס
+  const DEBUG_DRAW = true;
 
   // ======================= שליחה ל־Drive =======================
   const SCRIPT_URL =
@@ -243,11 +250,9 @@
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastZone: "O", // T/U/D/L/R/O
-    lastX: null,
-    lastY: null,
-    totalOnMs: 0,      // בתוך T
-    totalOffMs: 0,     // מחוץ ל-T (כולל U/D/L/R וגם O)
+    lastZone: "O", // T/L/R/U/D/O
+    totalOnMs: 0,
+    totalOffMs: 0,
     totalSamples: 0,
     validSamples: 0,
     invalidSamples: 0,
@@ -256,19 +261,26 @@
     offRightEvents: 0,
     offUpEvents: 0,
     offDownEvents: 0,
-    timeTaskMs: 0,       // זמן בתוך T
-    timeDeviationMs: 0   // זמן מחוץ ל-T
+    timeTaskMs: 0,
+    timeDeviationMs: 0
   };
 
-  // מצב OFF – איתור רציף + סף זמן + "הצבעת רוב" לכיוון
+  // OFF state + majority vote
   const offState = {
     candidate: false,
     candidateStart: null,
     inOff: false,
     dir: "",
-
     votes: { L:0, R:0, U:0, D:0 },
     votesStart: null
+  };
+
+  // דיבוג: נקודה אחרונה
+  const dbg = {
+    x: null,
+    y: null,
+    zone: "O",
+    dir: ""
   };
 
   // כל הדגימות לקובץ ה-timeline
@@ -278,8 +290,6 @@
     gazeStats.hasStarted = false;
     gazeStats.lastTime = null;
     gazeStats.lastZone = "O";
-    gazeStats.lastX = null;
-    gazeStats.lastY = null;
     gazeStats.totalOnMs = 0;
     gazeStats.totalOffMs = 0;
     gazeStats.totalSamples = 0;
@@ -293,14 +303,16 @@
     gazeStats.timeTaskMs = 0;
     gazeStats.timeDeviationMs = 0;
 
-    gazeTimeline.length = 0;
-
     offState.candidate = false;
     offState.candidateStart = null;
     offState.inOff = false;
     offState.dir = "";
     offState.votes = { L:0, R:0, U:0, D:0 };
     offState.votesStart = null;
+
+    gazeTimeline.length = 0;
+
+    dbg.x = null; dbg.y = null; dbg.zone = "O"; dbg.dir = "";
   }
 
   // ======================= אזורים על המסך =======================
@@ -317,6 +329,12 @@
     return { canvasRect: rect, innerRect };
   }
 
+  /*
+    סיווג חדש (מובהק יותר):
+    - T: בתוך innerRect
+    - מחוץ ל-T אבל בתוך הקנבס: L/R/U/D לפי הווקטור מהמרכז של innerRect + Dead-zone
+    - מחוץ לקנבס או בלי נקודה: O
+  */
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
 
@@ -332,56 +350,30 @@
       y >= innerRect.top  && y <= innerRect.bottom;
     if (inInner) return "T";
 
-    // U
-    if (
-      x >= innerRect.left && x <= innerRect.right &&
-      y >= canvasRect.top && y < innerRect.top
-    ){
-      return "U";
+    // מרכז אזור המשימה
+    const cx = (innerRect.left + innerRect.right) / 2;
+    const cy = (innerRect.top + innerRect.bottom) / 2;
+
+    const dx = x - cx;
+    const dy = y - cy;
+
+    const deadX = (innerRect.right - innerRect.left) * DIR_DEADZONE_RATIO;
+    const deadY = (innerRect.bottom - innerRect.top) * DIR_DEADZONE_RATIO;
+
+    // Dead-zone: אם לא יצא מובהק מהמרכז — נחשב כ-O כדי לא לסווג רעש
+    if (Math.abs(dx) < deadX && Math.abs(dy) < deadY){
+      return "O";
     }
 
-    // D
-    if (
-      x >= innerRect.left && x <= innerRect.right &&
-      y > innerRect.bottom && y <= canvasRect.bottom
-    ){
-      return "D";
+    // דומיננטי: אם dx חזק יותר => ימין/שמאל, אחרת למעלה/למטה
+    if (Math.abs(dx) >= Math.abs(dy)){
+      return dx >= 0 ? "R" : "L";
+    } else {
+      return dy >= 0 ? "D" : "U";
     }
-
-    // L
-    if (
-      y >= innerRect.top && y <= innerRect.bottom &&
-      x >= canvasRect.left && x < innerRect.left
-    ){
-      return "L";
-    }
-
-    // R
-    if (
-      y >= innerRect.top && y <= innerRect.bottom &&
-      x > innerRect.right && x <= canvasRect.right
-    ){
-      return "R";
-    }
-
-    // פינות אלכסוניות בתוך הקנבס: קובעים כיוון לפי החריגה הדומיננטית
-    const dxL = innerRect.left - x;
-    const dxR = x - innerRect.right;
-    const dyU = innerRect.top - y;
-    const dyD = y - innerRect.bottom;
-
-    const candidates = [];
-    if (dxL > 0) candidates.push({ dir:"L", d: dxL });
-    if (dxR > 0) candidates.push({ dir:"R", d: dxR });
-    if (dyU > 0) candidates.push({ dir:"U", d: dyU });
-    if (dyD > 0) candidates.push({ dir:"D", d: dyD });
-
-    if (!candidates.length) return "O";
-    candidates.sort((a,b) => b.d - a.d);
-    return candidates[0].dir;
   }
 
-  // ======================= מאזין WebGazer =======================
+  // ======================= WebGazer listener =======================
   function handleGaze(data, elapsedTime){
     if (!running || sessionEnded) return;
 
@@ -393,7 +385,12 @@
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
     const onFlag = (zoneNow === "T") ? 1 : 0;
 
-    // ---- צבירת זמנים לפי INTERVAL קודם ----
+    // Debug state
+    dbg.x = (hadRaw && zoneNow !== "O") ? sampleX : null;
+    dbg.y = (hadRaw && zoneNow !== "O") ? sampleY : null;
+    dbg.zone = zoneNow;
+
+    // ---- צבירת זמנים לפי interval קודם ----
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
@@ -404,7 +401,7 @@
       const dt = t - (gazeStats.lastTime || t);
       gazeStats.lastTime = t;
 
-      if (gazeStats.lastZone === "T") {
+      if (gazeStats.lastZone === "T"){
         gazeStats.totalOnMs += dt;
         gazeStats.timeTaskMs += dt;
       } else {
@@ -417,9 +414,9 @@
       else        gazeStats.invalidSamples++;
     }
 
-    // ---- OFF: יציאה מ-T לכל דבר אחר + "הצבעת רוב" לקביעת כיוון ----
+    // ---- OFF logic ----
     if (onFlag === 1){
-      // חזרה למשימה => איפוס OFF + קולות
+      // חזרה ל-T => איפוס
       if (offState.candidate || offState.inOff || offState.votesStart != null){
         offState.candidate = false;
         offState.candidateStart = null;
@@ -439,13 +436,13 @@
         offState.votesStart = t;
       }
 
-      // צבירת קולות רק אם יש כיוון ממשי (L/R/U/D)
+      // צבירת קולות לכיוון רק אם zoneNow הוא כיוון
       if (zoneNow === "L") offState.votes.L++;
       else if (zoneNow === "R") offState.votes.R++;
       else if (zoneNow === "U") offState.votes.U++;
       else if (zoneNow === "D") offState.votes.D++;
 
-      // כל DIR_WINDOW_MS: מחשבים כיוון יציב לפי רוב
+      // אחת ל-DIR_WINDOW_MS: קובעים כיוון לפי רוב
       if (offState.votesStart != null && (t - offState.votesStart) >= DIR_WINDOW_MS){
         const arr = [
           ["L", offState.votes.L],
@@ -456,14 +453,13 @@
 
         const [bestDir, bestVotes] = arr[0];
         if (bestVotes >= DIR_MIN_VOTES){
-          offState.dir = bestDir; // ✅ כיוון יציב
+          offState.dir = bestDir;
         }
-
         offState.votes = { L:0, R:0, U:0, D:0 };
         offState.votesStart = t;
       }
 
-      // אישור OFF "אמיתי" רק אחרי OFF_MIN_MS, ורק אם כבר יש כיוון יציב
+      // OFF "אמיתי" רק אחרי OFF_MIN_MS + רק אם כבר יש כיוון יציב
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
@@ -480,10 +476,12 @@
       }
     }
 
+    dbg.dir = offState.dir || "";
+
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
 
-    // לשמור X/Y גם במסגרת (לא רק בתוך T)
+    // X/Y נשמרים רק כשיש נקודה בתוך הקנבס (לא O)
     let xOut = "";
     let yOut = "";
     if (hadRaw && zoneNow !== "O"){
@@ -491,7 +489,7 @@
       yOut = Math.round(sampleY);
     }
 
-    // ✅ בטיימליין: נרשום כיוון רק כשהוא יציב (מפחית רעש)
+    // בטיימליין נרשום כיוון רק כשהוא יציב (מקטין רעש)
     let dirSample = "";
     if (onFlag === 0 && offState.dir){
       dirSample = offState.dir;
@@ -500,7 +498,7 @@
     gazeTimeline.push({
       ms,
       task: taskIndex,
-      zone: zoneNow,   // ✅ עמודה נוספת
+      zone: zoneNow,
       x: xOut,
       y: yOut,
       on: onFlag,
@@ -508,6 +506,7 @@
     });
 
     gazeStats.lastZone = zoneNow;
+    draw(); // כדי לראות debug overlay בזמן אמת
   }
 
   function buildEyeCsv(){
@@ -574,32 +573,17 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  // CSV של פריסת הנקודות (מספרים) לכל משימה
   function buildPointsLayoutCsv(){
     const pid = (pidInput.value || "").trim();
     if (!taskLayouts.length) return "";
-    const head = [
-      "pid",
-      "task_index",
-      "point_index",
-      "number",
-      "x_screen",
-      "y_screen"
-    ];
+    const head = ["pid","task_index","point_index","number","x_screen","y_screen"];
     const rows = taskLayouts.map(row =>
-      [
-        pid,
-        row.task_index,
-        row.point_index,
-        row.number,
-        Math.round(row.x_screen),
-        Math.round(row.y_screen)
-      ].join(",")
+      [pid,row.task_index,row.point_index,row.number,Math.round(row.x_screen),Math.round(row.y_screen)].join(",")
     );
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  // ======================= WebGazer + כיול =======================
+  // ======================= WebGazer + Calibration =======================
   function startWebgazerAndCalibration(){
     if (!window.webgazer){
       alert("ספריית WebGazer לא נטענה. ניתן להמשיך עם המשימה בלי מעקב עיניים.");
@@ -639,28 +623,24 @@
     draw();
   }
 
-  function randomBetween(min,max){
-    return min + Math.random() * (max - min);
-  }
+  // ======================= Points generation =======================
+  function randomBetween(min,max){ return min + Math.random() * (max - min); }
 
   function pointToSegmentDistance(p,a,b){
-    const vx = b.x - a.x, vy = b.y - a.y;
-    const wx = p.x - a.x, wy = p.y - a.y;
-    const c1 = vx*wx + vy*wy;
-    if (c1 <= 0) return Math.hypot(p.x-a.x, p.y-a.y);
-    const c2 = vx*vx + vy*vy;
-    if (c2 <= c1) return Math.hypot(p.x-b.x, p.y-b.y);
-    const tt = c1 / c2;
-    const projX = a.x + tt*vx;
-    const projY = a.y + tt*vy;
-    return Math.hypot(p.x-projX, p.y-projY);
+    const vx=b.x-a.x, vy=b.y-a.y;
+    const wx=p.x-a.x, wy=p.y-a.y;
+    const c1=vx*wx+vy*wy;
+    if(c1<=0) return Math.hypot(p.x-a.x,p.y-a.y);
+    const c2=vx*vx+vy*vy;
+    if(c2<=c1) return Math.hypot(p.x-b.x,p.y-b.y);
+    const tt=c1/c2;
+    const projX=a.x+tt*vx, projY=a.y+tt*vy;
+    return Math.hypot(p.x-projX,p.y-projY);
   }
 
-  // ======================= יצירת נקודות =======================
   function generatePoints(n){
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
-
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
@@ -675,16 +655,11 @@
 
     while (pts.length < n && attempts < maxAttempts){
       attempts++;
-      const candidate = {
-        x: randomBetween(left, left + W),
-        y: randomBetween(top,  top + H)
-      };
+      const candidate = { x: randomBetween(left, left + W), y: randomBetween(top, top + H) };
 
       let ok = true;
       for (const p of pts){
-        if (Math.hypot(p.x-candidate.x, p.y-candidate.y) < CONFIG.minDistance){
-          ok = false; break;
-        }
+        if (Math.hypot(p.x-candidate.x, p.y-candidate.y) < CONFIG.minDistance){ ok = false; break; }
       }
       if (!ok) continue;
 
@@ -696,19 +671,17 @@
 
       pts.push(candidate);
     }
+
     while (pts.length < n){
-      pts.push({
-        x: randomBetween(left, left + W),
-        y: randomBetween(top,  top + H)
-      });
+      pts.push({ x: randomBetween(left, left + W), y: randomBetween(top, top + H) });
     }
     return pts;
   }
 
   function openNewTask(n){
     pendingNextTaskPoints = null;
-
     const pts = generatePoints(n);
+
     currentTask = {
       index: ++taskCounter,
       points: pts,
@@ -720,24 +693,20 @@
 
     try {
       const rect = canvas.getBoundingClientRect();
-      const layoutRows = pts.map((p, idx) => {
-        return {
-          task_index: currentTask.index,
-          point_index: idx + 1,
-          number: idx + 1,
-          x_screen: rect.left + p.x,
-          y_screen: rect.top  + p.y
-        };
-      });
+      const layoutRows = pts.map((p, idx) => ({
+        task_index: currentTask.index,
+        point_index: idx + 1,
+        number: idx + 1,
+        x_screen: rect.left + p.x,
+        y_screen: rect.top  + p.y
+      }));
       taskLayouts.push(...layoutRows);
-    } catch (e) {
-      console.warn("Failed to log task layout:", e);
-    }
+    } catch (e) {}
 
     draw();
   }
 
-  // ======================= כיול =======================
+  // ======================= Calibration =======================
   function generateCalibrationPoints(count){
     const rect = canvas.getBoundingClientRect();
     const m = 30;
@@ -785,7 +754,7 @@
         const vy = rect.top  + current.y;
         webgazer.recordScreenPosition(vx, vy, "click");
       }
-    } catch(e){ console.warn("recordScreenPosition failed:", e); }
+    } catch(e){}
 
     calibrationIndex++;
     if (calibrationIndex >= calibrationPoints.length){
@@ -809,7 +778,7 @@
   function showCalibrationIntro(){
     overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים";
     overlayText.textContent =
-      "על מנת לכייל את המערכת, יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות במקומות שונים על המסך – יש להביט בכל נקודה וללחוץ עליה.";
+      "על מנת לכייל את המערכת, יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.";
     overlayContinue.textContent = "פתח מצלמה וכייל";
     overlay.style.display = "grid";
     overlayContinue.onclick = () => {
@@ -818,15 +787,67 @@
     };
   }
 
-  // ======================= ציור =======================
-  function draw(){
-    ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
+  // ======================= Drawing =======================
+  function drawDebugOverlay(){
+    if (!DEBUG_DRAW) return;
 
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
+
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
+    const innerX = frameMarginX;
+    const innerY = frameMarginY;
+    const innerW = w - 2*frameMarginX;
+    const innerH = h - 2*frameMarginY;
+
+    // innerRect outline
+    ctx.save();
+    ctx.strokeStyle = "rgba(96,165,250,0.7)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(innerX, innerY, innerW, innerH);
+
+    // center cross
+    const cx = innerX + innerW/2;
+    const cy = innerY + innerH/2;
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
+    ctx.beginPath();
+    ctx.moveTo(cx, innerY); ctx.lineTo(cx, innerY+innerH);
+    ctx.moveTo(innerX, cy); ctx.lineTo(innerX+innerW, cy);
+    ctx.stroke();
+
+    // dead-zone rectangle
+    const dzX = innerW * DIR_DEADZONE_RATIO;
+    const dzY = innerH * DIR_DEADZONE_RATIO;
+    ctx.strokeStyle = "rgba(34,197,94,0.55)";
+    ctx.strokeRect(cx - dzX, cy - dzY, dzX*2, dzY*2);
+
+    // gaze point (screen -> canvas coords)
+    if (dbg.x != null && dbg.y != null){
+      const rect = canvas.getBoundingClientRect();
+      const gx = dbg.x - rect.left;
+      const gy = dbg.y - rect.top;
+
+      ctx.fillStyle = "rgba(244,63,94,0.9)";
+      ctx.beginPath();
+      ctx.arc(gx, gy, 5, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // text
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.font = "12px system-ui, Arial";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`zone=${dbg.zone}  dir=${dbg.dir || "-"}`, 12, 12);
+    ctx.restore();
+  }
+
+  function draw(){
+    ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
+
+    // Calibration view
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -846,16 +867,21 @@
       return;
     }
 
-    if (!currentTask) return;
+    if (!currentTask){
+      // גם בלי משימה — אפשר עדיין להראות debug overlay
+      drawDebugOverlay();
+      return;
+    }
 
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    // Draw task border (inner rect)
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
+    const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.35)";
     ctx.lineWidth = 1.2;
-    ctx.strokeRect(
-      frameMarginX,
-      frameMarginY,
-      w - 2*frameMarginX,
-      h - 2*frameMarginY
-    );
+    ctx.strokeRect(frameMarginX, frameMarginY, w-2*frameMarginX, h-2*frameMarginY);
 
     const pts = currentTask.points;
     const order = currentTask.selectionOrder;
@@ -899,9 +925,11 @@
         ctx.fillText(String(idx+1), p.x, p.y);
       }
     });
+
+    drawDebugOverlay();
   }
 
-  // ======================= אינטראקציה עם הנקודות =======================
+  // ======================= Interaction =======================
   function hitTest(x,y){
     if (!currentTask) return -1;
     const pts = currentTask.points;
@@ -971,7 +999,7 @@
   canvas.addEventListener("pointerdown", handlePointerDown);
   canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
 
-  // ======================= לוג משימות =======================
+  // ======================= Task logging =======================
   function sendTaskToLogForm(row){
     const params = new URLSearchParams();
     params.set(LOG_ENTRY_PID,       row.pid);
@@ -1023,7 +1051,7 @@
     };
   }
 
-  // ======================= ניהול סשן =======================
+  // ======================= Session =======================
   function tick(){
     if (!running) return;
     const elapsedSec = (now() - sessionStart) / 1000;
