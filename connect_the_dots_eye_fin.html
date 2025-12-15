@@ -175,16 +175,17 @@
 
   // שלב מרכז
   const CENTER_HOLD_MS = 5000;
-  const CENTER_MIN_SAMPLES = 18;
-  const CENTER_MAX_STD_PX = 80;
+  const CENTER_MIN_SAMPLES = 12; // פחות מחמיר כדי לא להיתקע
+  const CENTER_MAX_STD_PX = 120; // פחות מחמיר
   let centerAttempts = 0;
-  const MAX_CENTER_ATTEMPTS = 2;
+  const MAX_CENTER_ATTEMPTS = 1; // מקסימום ניסיון "ידני" אחד
+  const UNSTABLE_AUTO_MS = 2000; // אם לא יציב – ממשיכים אוטומטית אחרי 2ש'
 
   // שלב בדיקת X (ימין/שמאל) – עם נקודה ימנית/שמאלית
   const XCHECK_RIGHT_MS = 4000;
   const XCHECK_LEFT_MS  = 4000;
-  const XCHECK_MIN_SAMPLES = 18;
-  const XCHECK_MIN_DELTA_PX = 35;
+  const XCHECK_MIN_SAMPLES = 12;
+  const XCHECK_MIN_DELTA_PX = 30;
 
   // להשאיר נקודה אדומה
   const DRAW_GAZE_DOT = true;
@@ -266,6 +267,7 @@
   let holdActive = false;
   let holdStart = null;
   let holdSamples = [];
+  let holdWatchdogId = null;
 
   let xCheckActive = false;
   let xCheckPhase = "right";
@@ -451,7 +453,6 @@
     if (!arr.length) return null;
     return arr.reduce((a,v)=>a+v,0)/arr.length;
   }
-
   function stdOf(arr){
     if (arr.length < 2) return 9999;
     const m = arr.reduce((a,v)=>a+v,0)/arr.length;
@@ -495,6 +496,16 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
+  function buildPointsLayoutCsv(){
+    const pid = (pidInput.value || "").trim();
+    if (!taskLayouts.length) return "";
+    const head = ["pid","task_index","point_index","number","x_screen","y_screen"];
+    const rows = taskLayouts.map(row =>
+      [pid,row.task_index,row.point_index,row.number,Math.round(row.x_screen),Math.round(row.y_screen)].join(",")
+    );
+    return head.join(",") + "\n" + rows.join("\n");
+  }
+
   // ======================= Drawing helpers =======================
   function drawGazeDot(){
     if (!DRAW_GAZE_DOT) return;
@@ -506,6 +517,12 @@
     ctx.beginPath();
     ctx.arc(gx, gy, 6, 0, Math.PI*2);
     ctx.fill();
+  }
+
+  function clampCountdownMs(totalMs, elapsedMs){
+    const remain = totalMs - elapsedMs;
+    const sec = Math.ceil(remain / 1000);
+    return Math.max(1, sec);
   }
 
   function draw(){
@@ -543,8 +560,7 @@
       ctx.fill();
 
       const elapsed = performance.now() - holdStart;
-      const leftMs = Math.max(0, CENTER_HOLD_MS - elapsed);
-      const leftSec = Math.max(1, Math.ceil(leftMs/1000)); // <-- לא יראה 0
+      const leftSec = clampCountdownMs(CENTER_HOLD_MS, elapsed);
 
       ctx.fillStyle = "#e5e7eb";
       ctx.font = "14px system-ui, Arial";
@@ -556,20 +572,15 @@
       return;
     }
 
-    // -------- XCheck: נקודה ימינה/שמאלה בתוך המסגרת (לא במרכז!)
+    // -------- XCheck: נקודה ימינה/שמאלה
     if (xCheckActive){
       const { marginX, marginY } = getZoneRects();
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
 
       const y = marginY + (h - 2*marginY)/2;
-
-      // נקודות בתוך הקנבס, מחוץ לאזור המשימה:
-      // בימין - בתוך המסגרת, ליד הקצה הימני
-      // בשמאל - בתוך המסגרת, ליד הקצה השמאלי
       const xRight = w - Math.max(18, marginX * 0.45);
       const xLeft  = Math.max(18, marginX * 0.45);
-
       const targetX = (xCheckPhase === "right") ? xRight : xLeft;
 
       ctx.fillStyle = "#ef4444";
@@ -580,9 +591,7 @@
       const nowT = performance.now();
       const elapsed = nowT - xCheckStart;
       const total = (xCheckPhase === "right") ? XCHECK_RIGHT_MS : XCHECK_LEFT_MS;
-
-      const leftMs = Math.max(0, total - elapsed);
-      const leftSec = Math.max(1, Math.ceil(leftMs/1000)); // <-- לא יראה 0
+      const leftSec = clampCountdownMs(total, elapsed);
 
       ctx.fillStyle = "#e5e7eb";
       ctx.font = "14px system-ui, Arial";
@@ -660,36 +669,41 @@
     drawGazeDot();
   }
 
-  let drawQueued=false;
-  function requestDraw(){
-    if(drawQueued) return;
-    drawQueued=true;
-    requestAnimationFrame(()=>{ drawQueued=false; draw(); });
-  }
-
-  // ======================= כיול מרכז (לא נתקע) =======================
+  // ======================= כיול מרכז: תמיד נגמר ולא נתקע =======================
   function startCenterHold(){
+    if (holdWatchdogId) clearTimeout(holdWatchdogId);
+
     holdActive = true;
     holdStart = performance.now();
     holdSamples = [];
     resetSmoothing();
     draw();
 
-    const step = () => {
+    // watchdog: גם אם משהו משתבש – אחרי 7 שניות סוגרים בכוח
+    holdWatchdogId = setTimeout(() => {
+      if (holdActive){
+        holdActive = false;
+        finalizeCenterHold([...holdSamples], true);
+      }
+    }, CENTER_HOLD_MS + 2000);
+
+    const loop = () => {
       if (!holdActive) return;
       const elapsed = performance.now() - holdStart;
-      requestDraw();
+      draw();
       if (elapsed >= CENTER_HOLD_MS){
         holdActive = false;
-        finalizeCenterHold([...holdSamples]);
+        finalizeCenterHold([...holdSamples], false);
         return;
       }
-      setTimeout(step, 50);
+      requestAnimationFrame(loop);
     };
-    step();
+    requestAnimationFrame(loop);
   }
 
-  function finalizeCenterHold(collected){
+  function finalizeCenterHold(collected, forced){
+    if (holdWatchdogId) { clearTimeout(holdWatchdogId); holdWatchdogId = null; }
+
     centerAttempts++;
 
     const xs = collected.map(s=>s.x);
@@ -700,38 +714,69 @@
     const sy = stdOf(ys);
 
     const unstable = (
+      forced ||
       collected.length < CENTER_MIN_SAMPLES ||
       sx > CENTER_MAX_STD_PX ||
-      sy > CENTER_MAX_STD_PX
+      sy > CENTER_MAX_STD_PX ||
+      avgX == null || avgY == null
     );
 
-    if (unstable && centerAttempts < MAX_CENTER_ATTEMPTS){
-      overlayTitle.textContent = "המעקב מעט לא יציב";
-      overlayText.textContent =
-        "ננסה שוב את כיול המרכז.\n" +
-        "נא לשבת ישר, לא להזיז ראש, ולהתמקד בנקודה במרכז.";
-      overlayContinue.textContent = "נסה שוב";
-      overlay.style.display = "grid";
-      overlayContinue.onclick = () => {
-        overlay.style.display = "none";
-        holdStart = performance.now();
-        holdSamples = [];
-        holdActive = true;
-      };
-      return;
-    }
-
-    // Best-effort offset
+    // תמיד נגדיר offset Best-Effort (גם אם לא יציב)
     const { innerRect } = getZoneRects();
     const targetCx = (innerRect.left + innerRect.right) / 2;
     const targetCy = (innerRect.top  + innerRect.bottom) / 2;
 
-    gazeFix.offsetX = (targetCx - (avgX ?? targetCx));
-    gazeFix.offsetY = (targetCy - (avgY ?? targetCy));
+    gazeFix.offsetX = targetCx - (avgX ?? targetCx);
+    gazeFix.offsetY = targetCy - (avgY ?? targetCy);
     gazeFix.hasOffset = true;
-
     resetSmoothing();
-    startXCheck();
+
+    if (!unstable){
+      startXCheck();
+      return;
+    }
+
+    // אם לא יציב – לכל היותר ניסיון אחד "ידני", אבל גם אז יש AUTO-continue
+    if (centerAttempts <= MAX_CENTER_ATTEMPTS){
+      overlayTitle.textContent = "המעקב מעט לא יציב";
+      overlayText.textContent =
+        "ננסה עוד פעם אחת (אם תרצה).\n" +
+        "אם לא ילך — נמשיך בכל מקרה תוך 2 שניות.";
+      overlayContinue.textContent = "נסה שוב";
+      overlay.style.display = "grid";
+
+      const autoGo = setTimeout(() => {
+        // ממשיכים בכל מקרה
+        if (overlay.style.display === "grid"){
+          overlay.style.display = "none";
+          startXCheck();
+        }
+      }, UNSTABLE_AUTO_MS);
+
+      overlayContinue.onclick = () => {
+        clearTimeout(autoGo);
+        overlay.style.display = "none";
+        startCenterHold();
+      };
+      return;
+    }
+
+    // כבר ניסינו פעם -> ממשיכים
+    overlayTitle.textContent = "ממשיכים הלאה";
+    overlayText.textContent = "המעקב לא יציב מספיק, אבל נמשיך כדי לא לעכב את המשימה.";
+    overlayContinue.textContent = "המשך";
+    overlay.style.display = "grid";
+    const autoGo2 = setTimeout(() => {
+      if (overlay.style.display === "grid"){
+        overlay.style.display = "none";
+        startXCheck();
+      }
+    }, 1200);
+    overlayContinue.onclick = () => {
+      clearTimeout(autoGo2);
+      overlay.style.display = "none";
+      startXCheck();
+    };
   }
 
   // ======================= XCheck (ימין ואז שמאל) =======================
@@ -746,26 +791,28 @@
 
     const loop = () => {
       if (!xCheckActive) return;
+
       const nowT = performance.now();
       const elapsed = nowT - xCheckStart;
       const total = (xCheckPhase === "right") ? XCHECK_RIGHT_MS : XCHECK_LEFT_MS;
 
-      requestDraw();
+      draw();
 
       if (elapsed >= total){
         if (xCheckPhase === "right"){
           xCheckPhase = "left";
-          xCheckStart = performance.now(); // חשוב
-          requestDraw();                   // חשוב: שלא יציג 0
+          xCheckStart = performance.now();
+          requestAnimationFrame(loop);
+          return;
         } else {
           xCheckActive = false;
           finalizeXCheck();
+          return;
         }
-      } else {
-        setTimeout(loop, 50);
       }
+      requestAnimationFrame(loop);
     };
-    loop();
+    requestAnimationFrame(loop);
   }
 
   function finalizeXCheck(){
@@ -773,21 +820,16 @@
       finishCalibration();
       return;
     }
-
     const rx = meanOf(xCheckSamplesRight.map(s=>s.x));
     const lx = meanOf(xCheckSamplesLeft.map(s=>s.x));
-
     if (rx == null || lx == null || Math.abs(rx - lx) < XCHECK_MIN_DELTA_PX){
       finishCalibration();
       return;
     }
-
-    // אם "ימין" יצא קטן מ"שמאל" -> ציר הפוך
     if (rx < lx){
       FLIP_X = !FLIP_X;
       resetSmoothing();
     }
-
     finishCalibration();
   }
 
@@ -820,24 +862,20 @@
 
     if (holdActive && hadRaw && fixed.rawX != null && fixed.rawY != null){
       holdSamples.push({x: fixed.rawX, y: fixed.rawY});
-      requestDraw();
       return;
     }
     if (xCheckActive && hadRaw && fixed.rawX != null && fixed.rawY != null){
       if (xCheckPhase === "right") xCheckSamplesRight.push({x: fixed.rawX, y: fixed.rawY});
       else xCheckSamplesLeft.push({x: fixed.rawX, y: fixed.rawY});
-      requestDraw();
       return;
     }
 
     if (!running || !currentTask){
-      requestDraw();
       return;
     }
 
     const zoneNow = classifyZone(hadRaw, fixed.rawX, fixed.rawY);
     const onFlag = (zoneNow === "T") ? 1 : 0;
-
     const t = elapsedTime;
 
     if (!gazeStats.hasStarted){
@@ -937,7 +975,6 @@
     });
 
     gazeStats.lastZone = zoneNow;
-    requestDraw();
   }
 
   // ======================= WebGazer + כיול נקודות =======================
@@ -1026,8 +1063,7 @@
       overlayTitle.textContent = "שלב אחרון בכיול";
       overlayText.textContent =
         "כעת נא להתמיד במבט על הנקודה במרכז למשך 5 שניות (בלי להזיז ראש).\n" +
-        "אם יהיה ריצוד – ננסה עוד פעם אחת, ואז נמשיך בכל מקרה.\n\n" +
-        "לאחר מכן: תופיע נקודה בצד ימין (4 שניות) ואז בצד שמאל (4 שניות).";
+        "לאחר מכן: נקודה בצד ימין 4 שניות ואז בצד שמאל 4 שניות.";
       overlayContinue.textContent = "התחל";
       overlay.style.display = "grid";
       overlayContinue.onclick = () => {
@@ -1281,16 +1317,6 @@
     return head.join(",") + "\n" + rows.join("\n");
   }
 
-  function buildPointsLayoutCsv(){
-    const pid = (pidInput.value || "").trim();
-    if (!taskLayouts.length) return "";
-    const head = ["pid","task_index","point_index","number","x_screen","y_screen"];
-    const rows = taskLayouts.map(row =>
-      [pid,row.task_index,row.point_index,row.number,Math.round(row.x_screen),Math.round(row.y_screen)].join(",")
-    );
-    return head.join(",") + "\n" + rows.join("\n");
-  }
-
   function buildFormSummary(){
     const completedTasks = tasks.filter(t => t.completed === 1);
     const totalTasksCompleted = completedTasks.length;
@@ -1426,6 +1452,9 @@
   });
 
   endBtn.addEventListener("click", () => endSession(false));
+
+  // redraw loop קטן כדי שהנקודה האדומה תזוז תמיד
+  setInterval(() => { draw(); }, 33);
 
   resizeAndIntro();
 })();
