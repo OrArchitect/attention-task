@@ -158,7 +158,7 @@
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // OFF אמיתי – לפחות 500ms מחוץ למסך (אחרי יציאה מאזור המסגרת)
+  // OFF אמיתי – לפחות 500ms מחוץ לשטח המשימה (T) (כולל המסגרת U/D/L/R)
   const OFF_MIN_MS = 500;
 
   // ======================= שליחה ל־Drive =======================
@@ -239,11 +239,11 @@
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastZone: "O",
+    lastZone: "O", // T/U/D/L/R/O
     lastX: null,
     lastY: null,
-    totalOnMs: 0,
-    totalOffMs: 0,
+    totalOnMs: 0,      // בתוך T
+    totalOffMs: 0,     // מחוץ ל-T (כולל U/D/L/R וגם O)
     totalSamples: 0,
     validSamples: 0,
     invalidSamples: 0,
@@ -252,8 +252,8 @@
     offRightEvents: 0,
     offUpEvents: 0,
     offDownEvents: 0,
-    timeTaskMs: 0,
-    timeDeviationMs: 0
+    timeTaskMs: 0,       // זמן בתוך T
+    timeDeviationMs: 0   // זמן מחוץ ל-T
   };
 
   // מצב OFF – איתור רציף + סף זמן
@@ -262,7 +262,7 @@
     candidateStart: null,
     inOff: false,
     dir: "",
-    lastZoneBeforeOff: null   // מאיזה צד של המסגרת יצאנו
+    lastZoneBeforeOff: null
   };
 
   // כל הדגימות לקובץ ה-timeline
@@ -297,7 +297,6 @@
   }
 
   // ======================= אזורים על המסך =======================
-  // מחזיר את מלבן הקנבס ואת מלבן אזור המשימה הפנימי
   function getZoneRects(){
     const rect = canvas.getBoundingClientRect();
     const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
@@ -313,13 +312,9 @@
 
   /*
     מיפוי אזורי מבט:
-
     T – אזור המשימה (המלבן הפנימי)
-    U – רצועה מעל אזור המשימה (בין innerRect לקצה העליון של הקנבס)
-    D – רצועה מתחת לאזור המשימה
-    L – רצועה משמאל לאזור המשימה
-    R – רצועה מימין לאזור המשימה
-    O – מחוץ לקנבס (או בלי נקודת מבט)
+    U/D/L/R – מסגרת בתוך הקנבס
+    O – מחוץ לקנבס או בלי נקודת מבט
   */
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
@@ -336,7 +331,7 @@
       y >= innerRect.top  && y <= innerRect.bottom;
     if (inInner) return "T";
 
-    // רצועת מסגרת עליונה – U
+    // U
     if (
       x >= innerRect.left && x <= innerRect.right &&
       y >= canvasRect.top && y < innerRect.top
@@ -344,7 +339,7 @@
       return "U";
     }
 
-    // רצועת מסגרת תחתונה – D
+    // D
     if (
       x >= innerRect.left && x <= innerRect.right &&
       y > innerRect.bottom && y <= canvasRect.bottom
@@ -352,7 +347,7 @@
       return "D";
     }
 
-    // רצועת מסגרת שמאלית – L
+    // L
     if (
       y >= innerRect.top && y <= innerRect.bottom &&
       x >= canvasRect.left && x < innerRect.left
@@ -360,7 +355,7 @@
       return "L";
     }
 
-    // רצועת מסגרת ימנית – R
+    // R
     if (
       y >= innerRect.top && y <= innerRect.bottom &&
       x > innerRect.right && x <= canvasRect.right
@@ -368,8 +363,21 @@
       return "R";
     }
 
-    // אזורי פינה אלכסוניים – נחשבים OFF
-    return "O";
+    // פינות אלכסוניות בתוך הקנבס: קובעים כיוון לפי החריגה הדומיננטית
+    const dxL = innerRect.left - x;
+    const dxR = x - innerRect.right;
+    const dyU = innerRect.top - y;
+    const dyD = y - innerRect.bottom;
+
+    const candidates = [];
+    if (dxL > 0) candidates.push({ dir:"L", d: dxL });
+    if (dxR > 0) candidates.push({ dir:"R", d: dxR });
+    if (dyU > 0) candidates.push({ dir:"U", d: dyU });
+    if (dyD > 0) candidates.push({ dir:"D", d: dyD });
+
+    if (!candidates.length) return "O";
+    candidates.sort((a,b) => b.d - a.d);
+    return candidates[0].dir;
   }
 
   // ======================= מאזין WebGazer =======================
@@ -384,33 +392,38 @@
     const sampleY = hadRaw ? data.y : null;
 
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
-    const onFlag = (zoneNow === "O") ? 0 : 1;
 
-    // אם יש מבט על המסך – נשמור מאיזה אזור (T/U/D/L/R) היינו לפני היציאה
-    if (onFlag === 1 && hadRaw){
+    // ✅ on-screen = בתוך אזור המשימה בלבד (T)
+    const onFlag = (zoneNow === "T") ? 1 : 0;
+
+    // שמירת אזור סטייה אחרון (רק כיוונים)
+    if (zoneNow === "U" || zoneNow === "D" || zoneNow === "L" || zoneNow === "R"){
       offState.lastZoneBeforeOff = zoneNow;
     }
 
+    // ---- צבירת זמנים לפי INTERVAL קודם (lastZone) ----
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
       gazeStats.lastZone = zoneNow;
-      if (onFlag === 1 && hadRaw){
+      gazeStats.totalSamples = 1;
+      if (hadRaw) gazeStats.validSamples = 1; else gazeStats.invalidSamples = 1;
+
+      if (zoneNow === "T" && hadRaw){
         gazeStats.lastX = sampleX;
         gazeStats.lastY = sampleY;
       }
-      gazeStats.totalSamples = 1;
-      if (hadRaw) gazeStats.validSamples = 1; else gazeStats.invalidSamples = 1;
     } else {
       const dt = t - (gazeStats.lastTime || t);
       gazeStats.lastTime = t;
 
-      if (gazeStats.lastZone === "O") gazeStats.totalOffMs += dt;
-      else                            gazeStats.totalOnMs  += dt;
-
-      // זמן "על המשימה" – כל זמן שהמבט על המסך (לא OFF)
-      if (gazeStats.lastZone !== "O"){
+      // בתוך T = ON, אחרת OFF
+      if (gazeStats.lastZone === "T") {
+        gazeStats.totalOnMs += dt;
         gazeStats.timeTaskMs += dt;
+      } else {
+        gazeStats.totalOffMs += dt;
+        gazeStats.timeDeviationMs += dt;
       }
 
       gazeStats.totalSamples++;
@@ -418,42 +431,43 @@
       else        gazeStats.invalidSamples++;
     }
 
-    // לוגיקת OFF אמיתי: רק כשהמבט מחוץ למסך (O) לאורך OFF_MIN_MS
+    // ---- לוגיקת OFF: יציאה מ-T לכל דבר אחר (U/D/L/R/O) למשך OFF_MIN_MS ----
     if (onFlag === 1){
-      // חזרנו למסך – איפוס סטטוס OFF
+      // חזרה למשימה => איפוס
       if (offState.candidate || offState.inOff){
         offState.candidate = false;
         offState.candidateStart = null;
         offState.inOff = false;
         offState.dir = "";
       }
-    } else { // onFlag === 0 => zoneNow === "O"
-      if (gazeStats.lastZone !== "O" && !offState.candidate){
-        // יציאה חדשה מהמסך
+    } else {
+      // יציאה חדשה רק אם קודם היינו בתוך T
+      if (gazeStats.lastZone === "T" && !offState.candidate){
         offState.candidate = true;
         offState.candidateStart = t;
 
-        const z = offState.lastZoneBeforeOff;
-        if (z === "U" || z === "D" || z === "L" || z === "R"){
-          offState.dir = z;
+        // כיוון: אם zoneNow עצמו הוא U/D/L/R – זה הכיוון.
+        // אם zoneNow הוא O (למשל איבדנו נקודה), ניקח את האחרון הידוע.
+        if (zoneNow === "U" || zoneNow === "D" || zoneNow === "L" || zoneNow === "R"){
+          offState.dir = zoneNow;
         } else {
-          offState.dir = "";
+          offState.dir = offState.lastZoneBeforeOff || "";
         }
       }
 
+      // אישור OFF אחרי סף זמן
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
 
         offState.inOff = true;
-        const dir = offState.dir;
 
-        if (dir){
+        if (offState.dir){
           gazeStats.offEvents++;
-          if (dir === "L")      gazeStats.offLeftEvents++;
-          else if (dir === "R") gazeStats.offRightEvents++;
-          else if (dir === "U") gazeStats.offUpEvents++;
-          else if (dir === "D") gazeStats.offDownEvents++;
+          if (offState.dir === "L")      gazeStats.offLeftEvents++;
+          else if (offState.dir === "R") gazeStats.offRightEvents++;
+          else if (offState.dir === "U") gazeStats.offUpEvents++;
+          else if (offState.dir === "D") gazeStats.offDownEvents++;
         }
       }
     }
@@ -461,9 +475,10 @@
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
 
+    // ✅ לשמור X/Y גם במסגרת (לא רק בתוך T), כדי שתוכל לנתח סטיות
     let xOut = "";
     let yOut = "";
-    if (onFlag === 1 && hadRaw){
+    if (hadRaw && zoneNow !== "O"){
       xOut = Math.round(sampleX);
       yOut = Math.round(sampleY);
     }
@@ -483,7 +498,7 @@
     });
 
     gazeStats.lastZone = zoneNow;
-    if (onFlag === 1 && hadRaw){
+    if (zoneNow === "T" && hadRaw){
       gazeStats.lastX = sampleX;
       gazeStats.lastY = sampleY;
     }
@@ -627,9 +642,9 @@
     if (c1 <= 0) return Math.hypot(p.x-a.x, p.y-a.y);
     const c2 = vx*vx + vy*vy;
     if (c2 <= c1) return Math.hypot(p.x-b.x, p.y-b.y);
-    const t = c1 / c2;
-    const projX = a.x + t*vx;
-    const projY = a.y + t*vy;
+    const tt = c1 / c2;
+    const projX = a.x + tt*vx;
+    const projY = a.y + tt*vy;
     return Math.hypot(p.x-projX, p.y-projY);
   }
 
@@ -685,7 +700,6 @@
   function openNewTask(n){
     pendingNextTaskPoints = null;
 
-    // יצירת נקודות למשימה
     const pts = generatePoints(n);
     currentTask = {
       index: ++taskCounter,
@@ -696,7 +710,6 @@
       startTime: now()
     };
 
-    // לוג של מיקום הנקודות במסך (screen coords) עבור הניתוח
     try {
       const rect = canvas.getBoundingClientRect();
       const layoutRows = pts.map((p, idx) => {
@@ -806,7 +819,6 @@
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
-    // בזמן כיול – רק הנקודה האדומה והטקסט, ללא מסגרת
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -826,12 +838,10 @@
       return;
     }
 
-    // לפני התחלת משימה – לא מציירים כלום
     if (!currentTask){
       return;
     }
 
-    // מסגרת המשימה (הגבול בין אזור המשימה למסגרת U/L/R/D)
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 1.2;
     ctx.strokeRect(
