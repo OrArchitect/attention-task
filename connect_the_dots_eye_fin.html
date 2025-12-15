@@ -120,7 +120,6 @@
       </div>
       <div class="controls">
         <label for="pid">מזהה נבדק:</label>
-        <!-- ✅ שינוי placeholder -->
         <input id="pid" type="text" placeholder="לדוגמה ABC123" />
         <button id="startBtn" disabled>התחל משימה</button>
         <button id="endBtn" disabled>סיום מוקדם</button>
@@ -159,8 +158,12 @@
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // OFF אמיתי – לפחות 500ms מחוץ לשטח המשימה (T) (כולל המסגרת U/D/L/R)
-  const OFF_MIN_MS = 500;
+  // OFF אמיתי – לפחות Xms מחוץ לשטח המשימה (T)
+  const OFF_MIN_MS = 700;      // ✅ הוגדל כדי להפחית false positives
+
+  // "הצבעת רוב" לקביעת כיוון יציב
+  const DIR_WINDOW_MS = 350;   // ✅ חלון זמן לקביעת כיוון
+  const DIR_MIN_VOTES = 6;     // ✅ מינימום דגימות לאישור כיוון
 
   // ======================= שליחה ל־Drive =======================
   const SCRIPT_URL =
@@ -257,13 +260,15 @@
     timeDeviationMs: 0   // זמן מחוץ ל-T
   };
 
-  // מצב OFF – איתור רציף + סף זמן
+  // מצב OFF – איתור רציף + סף זמן + "הצבעת רוב" לכיוון
   const offState = {
     candidate: false,
     candidateStart: null,
     inOff: false,
     dir: "",
-    lastZoneBeforeOff: null
+
+    votes: { L:0, R:0, U:0, D:0 },
+    votesStart: null
   };
 
   // כל הדגימות לקובץ ה-timeline
@@ -294,7 +299,8 @@
     offState.candidateStart = null;
     offState.inOff = false;
     offState.dir = "";
-    offState.lastZoneBeforeOff = null;
+    offState.votes = { L:0, R:0, U:0, D:0 };
+    offState.votesStart = null;
   }
 
   // ======================= אזורים על המסך =======================
@@ -311,12 +317,6 @@
     return { canvasRect: rect, innerRect };
   }
 
-  /*
-    מיפוי אזורי מבט:
-    T – אזור המשימה (המלבן הפנימי)
-    U/D/L/R – מסגרת בתוך הקנבס
-    O – מחוץ לקנבס או בלי נקודת מבט
-  */
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
 
@@ -383,9 +383,7 @@
 
   // ======================= מאזין WebGazer =======================
   function handleGaze(data, elapsedTime){
-    if (!running || sessionEnded){
-      return;
-    }
+    if (!running || sessionEnded) return;
 
     const t = elapsedTime;
     const hadRaw = !!data;
@@ -393,32 +391,19 @@
     const sampleY = hadRaw ? data.y : null;
 
     const zoneNow = classifyZone(hadRaw, sampleX, sampleY);
-
-    // on-screen = בתוך אזור המשימה בלבד (T)
     const onFlag = (zoneNow === "T") ? 1 : 0;
 
-    // שמירת אזור סטייה אחרון (רק כיוונים)
-    if (zoneNow === "U" || zoneNow === "D" || zoneNow === "L" || zoneNow === "R"){
-      offState.lastZoneBeforeOff = zoneNow;
-    }
-
-    // ---- צבירת זמנים לפי INTERVAL קודם (lastZone) ----
+    // ---- צבירת זמנים לפי INTERVAL קודם ----
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted = true;
       gazeStats.lastTime = t;
       gazeStats.lastZone = zoneNow;
       gazeStats.totalSamples = 1;
       if (hadRaw) gazeStats.validSamples = 1; else gazeStats.invalidSamples = 1;
-
-      if (zoneNow === "T" && hadRaw){
-        gazeStats.lastX = sampleX;
-        gazeStats.lastY = sampleY;
-      }
     } else {
       const dt = t - (gazeStats.lastTime || t);
       gazeStats.lastTime = t;
 
-      // בתוך T = ON, אחרת OFF
       if (gazeStats.lastZone === "T") {
         gazeStats.totalOnMs += dt;
         gazeStats.timeTaskMs += dt;
@@ -432,31 +417,53 @@
       else        gazeStats.invalidSamples++;
     }
 
-    // ---- לוגיקת OFF: יציאה מ-T לכל דבר אחר (U/D/L/R/O) למשך OFF_MIN_MS ----
+    // ---- OFF: יציאה מ-T לכל דבר אחר + "הצבעת רוב" לקביעת כיוון ----
     if (onFlag === 1){
-      // חזרה למשימה => איפוס
-      if (offState.candidate || offState.inOff){
+      // חזרה למשימה => איפוס OFF + קולות
+      if (offState.candidate || offState.inOff || offState.votesStart != null){
         offState.candidate = false;
         offState.candidateStart = null;
         offState.inOff = false;
         offState.dir = "";
+        offState.votes = { L:0, R:0, U:0, D:0 };
+        offState.votesStart = null;
       }
     } else {
       // יציאה חדשה רק אם קודם היינו בתוך T
       if (gazeStats.lastZone === "T" && !offState.candidate){
         offState.candidate = true;
         offState.candidateStart = t;
-
-        // כיוון: אם zoneNow עצמו הוא U/D/L/R – זה הכיוון.
-        // אם zoneNow הוא O (למשל איבדנו נקודה), ניקח את האחרון הידוע.
-        if (zoneNow === "U" || zoneNow === "D" || zoneNow === "L" || zoneNow === "R"){
-          offState.dir = zoneNow;
-        } else {
-          offState.dir = offState.lastZoneBeforeOff || "";
-        }
+        offState.inOff = false;
+        offState.dir = "";
+        offState.votes = { L:0, R:0, U:0, D:0 };
+        offState.votesStart = t;
       }
 
-      // אישור OFF אחרי סף זמן (לסטטיסטיקות)
+      // צבירת קולות רק אם יש כיוון ממשי (L/R/U/D)
+      if (zoneNow === "L") offState.votes.L++;
+      else if (zoneNow === "R") offState.votes.R++;
+      else if (zoneNow === "U") offState.votes.U++;
+      else if (zoneNow === "D") offState.votes.D++;
+
+      // כל DIR_WINDOW_MS: מחשבים כיוון יציב לפי רוב
+      if (offState.votesStart != null && (t - offState.votesStart) >= DIR_WINDOW_MS){
+        const arr = [
+          ["L", offState.votes.L],
+          ["R", offState.votes.R],
+          ["U", offState.votes.U],
+          ["D", offState.votes.D],
+        ].sort((a,b)=>b[1]-a[1]);
+
+        const [bestDir, bestVotes] = arr[0];
+        if (bestVotes >= DIR_MIN_VOTES){
+          offState.dir = bestDir; // ✅ כיוון יציב
+        }
+
+        offState.votes = { L:0, R:0, U:0, D:0 };
+        offState.votesStart = t;
+      }
+
+      // אישור OFF "אמיתי" רק אחרי OFF_MIN_MS, ורק אם כבר יש כיוון יציב
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
@@ -484,16 +491,16 @@
       yOut = Math.round(sampleY);
     }
 
-    // ✅ כיוון בריחה בטיימליין: כבר מהרגע שיוצאים מ-T
+    // ✅ בטיימליין: נרשום כיוון רק כשהוא יציב (מפחית רעש)
     let dirSample = "";
-    if (onFlag === 0){
-      dirSample = offState.dir || (zoneNow === "U" || zoneNow === "D" || zoneNow === "L" || zoneNow === "R" ? zoneNow : "");
+    if (onFlag === 0 && offState.dir){
+      dirSample = offState.dir;
     }
 
     gazeTimeline.push({
       ms,
       task: taskIndex,
-      zone: zoneNow, // ✅ עמודה נוספת
+      zone: zoneNow,   // ✅ עמודה נוספת
       x: xOut,
       y: yOut,
       on: onFlag,
@@ -501,10 +508,6 @@
     });
 
     gazeStats.lastZone = zoneNow;
-    if (zoneNow === "T" && hadRaw){
-      gazeStats.lastX = sampleX;
-      gazeStats.lastY = sampleY;
-    }
   }
 
   function buildEyeCsv(){
@@ -550,7 +553,7 @@
       "pid",
       "task_index",
       "ms",
-      "zone",          // ✅ חדש
+      "zone",
       "x",
       "y",
       "on_screen",
@@ -843,9 +846,7 @@
       return;
     }
 
-    if (!currentTask){
-      return;
-    }
+    if (!currentTask) return;
 
     ctx.strokeStyle = "rgba(255,255,255,0.7)";
     ctx.lineWidth = 1.2;
