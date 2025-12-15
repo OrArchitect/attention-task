@@ -152,7 +152,6 @@
     lineAvoidDistance: 16
   };
 
-  // אזור המשימה
   const FRAME_MARGIN_X_RATIO = 0.06;
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
@@ -162,18 +161,18 @@
 
   const DIR_WINDOW_MS = 450;
   const DIR_MIN_VOTES = 8;
-
   const DIR_DEADZONE_RATIO = 0.28;
 
-  const SMOOTH_ALPHA = 0.18;
-  const MAX_JUMP_PX = 220;
+  // 🔥 שינוי: smoothing יותר מהיר (פחות lag)
+  const SMOOTH_ALPHA = 0.35;
 
-  // --- NEW: נקודת מרכז "18" למשך 5 שניות ---
-  const CENTER_HOLD_MS = 5000;          // אפשר לשנות ל-3000 אם תרצה
-  const CENTER_SAMPLE_STEP_MS = 30;
-  const CENTER_MIN_SAMPLES = 12;        // מינימום דגימות כדי לקבע offset
+  // 🔥 שינוי: במקום "הקפאה" כשקופץ - עושים step לכיוון היעד
+  const MAX_STEP_PX = 120;
 
-  // ציור נקודת gaze אדומה + סטטוס
+  // --- נקודת מרכז ---
+  const CENTER_HOLD_MS = 5000;
+  const CENTER_MIN_SAMPLES = 15;  // קצת יותר כדי ש-offset יצא יציב
+
   const DRAW_GAZE_DOT = true;
 
   // ======================= שליחה ל־Drive =======================
@@ -225,7 +224,6 @@
   const pidInput = document.getElementById("pid");
   const startBtn = document.getElementById("startBtn");
   const endBtn = document.getElementById("endBtn");
-
   const flipBtn = document.getElementById("flipBtn");
 
   const overlay = document.getElementById("overlay");
@@ -244,19 +242,16 @@
   let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
-  // כיול
   let isCalibrated = false;
-  const CALIB_POINTS_TOTAL = 17; // עדיין 17 קליקים רגילים
+  const CALIB_POINTS_TOTAL = 17;
   let calibrationActive = false;
   let calibrationPoints = [];
   let calibrationIndex = 0;
 
-  // --- NEW: שלב החזקת נקודת מרכז ---
   let centerHoldActive = false;
   let centerHoldStart = null;
   let centerSamples = [];
 
-  // פריסת נקודות למשימות
   const taskLayouts = [];
 
   // ======================= תיקוני WebGazer =======================
@@ -267,37 +262,64 @@
     offsetY: 0,
     hasOffset: false,
     smoothX: null,
-    smoothY: null,
-    lastX: null,
-    lastY: null
+    smoothY: null
+  };
+
+  const dbg = {
+    x: null, y: null,
+    zone: "O",
+    dir: "",
+    lastZone: "O"
   };
 
   function getScreenSize(){ return { w: window.innerWidth, h: window.innerHeight }; }
 
-  function applyFixes(rawX, rawY){
-    if (rawX == null || rawY == null) return { x:null, y:null };
-    let x = rawX, y = rawY;
+  function resetSmoothing(){
+    gazeFix.smoothX = null;
+    gazeFix.smoothY = null;
+  }
 
+  // 🔥 שינוי: applyFixes מחזיר גם "rawFixed" (לכיול מרכז נקי)
+  function applyFixes(rawX, rawY, mode){
+    if (rawX == null || rawY == null) return { x:null, y:null, rawX:null, rawY:null };
+
+    // שלב 1: flip אופציונלי
+    let x = rawX, y = rawY;
     if (FLIP_X){
       const { w } = getScreenSize();
       x = w - x;
     }
 
+    // שלב 2: offset (אם קיים)
     if (gazeFix.hasOffset){
       x += gazeFix.offsetX;
       y += gazeFix.offsetY;
     }
 
-    if (gazeFix.lastX != null && gazeFix.lastY != null){
-      const d = Math.hypot(x - gazeFix.lastX, y - gazeFix.lastY);
-      if (d > MAX_JUMP_PX){
-        x = gazeFix.lastX;
-        y = gazeFix.lastY;
+    // שמירה של "fixed but not smoothed"
+    const rawFixedX = x;
+    const rawFixedY = y;
+
+    // מצב כיול מרכז: בלי smoothing ובלי step-limit
+    if (mode === "calib"){
+      return { x: rawFixedX, y: rawFixedY, rawX: rawFixedX, rawY: rawFixedY };
+    }
+
+    // שלב 3: step-limit (לא להקפיא!)
+    if (gazeFix.smoothX != null && gazeFix.smoothY != null){
+      const dx = rawFixedX - gazeFix.smoothX;
+      const dy = rawFixedY - gazeFix.smoothY;
+      const d = Math.hypot(dx, dy);
+      if (d > MAX_STEP_PX){
+        x = gazeFix.smoothX + (dx / d) * MAX_STEP_PX;
+        y = gazeFix.smoothY + (dy / d) * MAX_STEP_PX;
+      } else {
+        x = rawFixedX;
+        y = rawFixedY;
       }
     }
-    gazeFix.lastX = x;
-    gazeFix.lastY = y;
 
+    // שלב 4: smoothing מהיר יותר
     if (gazeFix.smoothX == null){
       gazeFix.smoothX = x;
       gazeFix.smoothY = y;
@@ -305,12 +327,8 @@
       gazeFix.smoothX = gazeFix.smoothX + SMOOTH_ALPHA * (x - gazeFix.smoothX);
       gazeFix.smoothY = gazeFix.smoothY + SMOOTH_ALPHA * (y - gazeFix.smoothY);
     }
-    return { x: gazeFix.smoothX, y: gazeFix.smoothY };
-  }
 
-  function resetSmoothing(){
-    gazeFix.smoothX = null; gazeFix.smoothY = null;
-    gazeFix.lastX = null;   gazeFix.lastY = null;
+    return { x: gazeFix.smoothX, y: gazeFix.smoothY, rawX: rawFixedX, rawY: rawFixedY };
   }
 
   function getZoneRects(){
@@ -326,10 +344,6 @@
     return { canvasRect: rect, innerRect, marginX, marginY };
   }
 
-  // zone:
-  // T=inside task innerRect
-  // L/R/U/D = inside canvas but outside task, direction from center (with deadzone)
-  // O = outside canvas OR missing sample OR near-center noise
   function classifyZone(hadRaw, x, y){
     if (!hadRaw || x == null || y == null) return "O";
 
@@ -353,15 +367,10 @@
     const deadX = (innerRect.right - innerRect.left) * DIR_DEADZONE_RATIO;
     const deadY = (innerRect.bottom - innerRect.top) * DIR_DEADZONE_RATIO;
 
-    if (Math.abs(dx) < deadX && Math.abs(dy) < deadY){
-      return "O";
-    }
+    if (Math.abs(dx) < deadX && Math.abs(dy) < deadY) return "O";
 
-    if (Math.abs(dx) >= Math.abs(dy)){
-      return dx >= 0 ? "R" : "L";
-    } else {
-      return dy >= 0 ? "D" : "U";
-    }
+    if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "R" : "L";
+    return dy >= 0 ? "D" : "U";
   }
 
   // ======================= סטטיסטיקות/טיימליין =======================
@@ -392,45 +401,19 @@
     votesStart: null
   };
 
-  const dbg = {
-    x: null, y: null,
-    zone: "O",
-    dir: "",
-    rawX: null, rawY: null
-  };
-
   const gazeTimeline = [];
 
   function resetGazeStats(){
-    gazeStats.hasStarted = false;
-    gazeStats.lastTime = null;
-    gazeStats.lastZone = "O";
-    gazeStats.totalOnMs = 0;
-    gazeStats.totalOffMs = 0;
-    gazeStats.totalSamples = 0;
-    gazeStats.validSamples = 0;
-    gazeStats.invalidSamples = 0;
-    gazeStats.offEvents = 0;
-    gazeStats.offLeftEvents = 0;
-    gazeStats.offRightEvents = 0;
-    gazeStats.offUpEvents = 0;
-    gazeStats.offDownEvents = 0;
-    gazeStats.timeTaskMs = 0;
-    gazeStats.timeDeviationMs = 0;
-
-    offState.candidate = false;
-    offState.candidateStart = null;
-    offState.inOff = false;
-    offState.dir = "";
-    offState.votes = { L:0, R:0, U:0, D:0 };
-    offState.votesStart = null;
-
-    gazeTimeline.length = 0;
-
-    dbg.x=null; dbg.y=null;
-    dbg.zone="O"; dbg.dir="";
-    dbg.rawX=null; dbg.rawY=null;
-
+    Object.assign(gazeStats,{
+      hasStarted:false,lastTime:null,lastZone:"O",
+      totalOnMs:0,totalOffMs:0,totalSamples:0,validSamples:0,invalidSamples:0,
+      offEvents:0,offLeftEvents:0,offRightEvents:0,offUpEvents:0,offDownEvents:0,
+      timeTaskMs:0,timeDeviationMs:0
+    });
+    offState.candidate=false; offState.candidateStart=null;
+    offState.inOff=false; offState.dir="";
+    offState.votes={L:0,R:0,U:0,D:0}; offState.votesStart=null;
+    gazeTimeline.length=0;
     resetSmoothing();
   }
 
@@ -442,36 +425,31 @@
     const h = canvas.clientHeight;
     const { marginX, marginY } = getZoneRects();
 
-    // מסגרת אזור המשימה
     ctx.strokeStyle = "rgba(255,255,255,0.20)";
     ctx.lineWidth = 1.2;
     ctx.strokeRect(marginX, marginY, w - 2*marginX, h - 2*marginY);
 
-    // נקודת gaze
     if (dbg.x != null && dbg.y != null){
       const rect = canvas.getBoundingClientRect();
       const gx = dbg.x - rect.left;
       const gy = dbg.y - rect.top;
-
       ctx.fillStyle = "rgba(239,68,68,0.95)";
       ctx.beginPath();
       ctx.arc(gx, gy, 6, 0, Math.PI*2);
       ctx.fill();
     }
 
-    // טקסט סטטוס
     ctx.fillStyle = "rgba(255,255,255,0.85)";
     ctx.font = "12px system-ui, Arial";
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     const offTxt = gazeFix.hasOffset ? `offset=(${Math.round(gazeFix.offsetX)},${Math.round(gazeFix.offsetY)})` : "offset=none";
-    ctx.fillText(`zone=${dbg.zone} dir=${dbg.dir||"-"} flipX=${FLIP_X?"ON":"OFF"} ${offTxt}`, 12, 12);
+    ctx.fillText(`zone=${dbg.zone} dir=${offState.dir||"-"} flipX=${FLIP_X?"ON":"OFF"} ${offTxt}`, 12, 12);
   }
 
   function draw(){
     ctx.clearRect(0,0,canvas.clientWidth,canvas.clientHeight);
 
-    // בזמן כיול "קליקים" – מציירים נקודת כיול רגילה
     if (calibrationActive && calibrationPoints.length){
       const p = calibrationPoints[calibrationIndex] || calibrationPoints[calibrationPoints.length-1];
       ctx.fillStyle = "#ef4444";
@@ -489,7 +467,6 @@
       return;
     }
 
-    // NEW: בזמן נקודת מרכז 18 – מציירים נקודה במרכז + ספירה
     if (centerHoldActive){
       const { marginX, marginY } = getZoneRects();
       const w = canvas.clientWidth;
@@ -516,13 +493,11 @@
       return;
     }
 
-    // לפני משימה – עדיין נציג נקודת gaze כדי שתבדוק
     if (!currentTask){
       drawGazeDotAndStatus();
       return;
     }
 
-    // ציור המשימה
     const pts = currentTask.points;
     const order = currentTask.selectionOrder;
 
@@ -569,15 +544,11 @@
     drawGazeDotAndStatus();
   }
 
-  // RAF ציור
-  let drawQueued = false;
+  let drawQueued=false;
   function requestDraw(){
-    if (drawQueued) return;
-    drawQueued = true;
-    requestAnimationFrame(() => {
-      drawQueued = false;
-      draw();
-    });
+    if(drawQueued) return;
+    drawQueued=true;
+    requestAnimationFrame(()=>{ drawQueued=false; draw(); });
   }
 
   // ======================= WebGazer listener =======================
@@ -588,39 +559,37 @@
     const rawX = hadRaw ? data.x : null;
     const rawY = hadRaw ? data.y : null;
 
-    dbg.rawX = rawX; dbg.rawY = rawY;
+    // בזמן centerHold: משתמשים במצב calib (בלי smoothing/step-limit)
+    const mode = centerHoldActive ? "calib" : "run";
+    const fixed = hadRaw ? applyFixes(rawX, rawY, mode) : {x:null,y:null,rawX:null,rawY:null};
 
-    const fixed = hadRaw ? applyFixes(rawX, rawY) : {x:null,y:null};
-    const x = fixed.x;
-    const y = fixed.y;
+    dbg.x = fixed.x;
+    dbg.y = fixed.y;
 
-    dbg.x = (hadRaw && x != null && y != null) ? x : null;
-    dbg.y = (hadRaw && x != null && y != null) ? y : null;
-
-    // NEW: אם אנחנו בשלב החזקת מרכז — נאסוף דגימות לטובת offset
-    if (centerHoldActive && hadRaw && x != null && y != null){
-      centerSamples.push({x, y});
+    // איסוף דגימות ל-offset: ניקח דווקא rawFixed (לפני smoothing) בשביל דיוק
+    if (centerHoldActive && hadRaw && fixed.rawX != null && fixed.rawY != null){
+      centerSamples.push({x: fixed.rawX, y: fixed.rawY});
     }
 
-    // לוגיקה של zones/stats רק בזמן ריצה
+    // אם לא רצים עדיין — רק ציור
     if (!running || !currentTask){
-      dbg.zone = classifyZone(hadRaw, x, y);
+      dbg.zone = classifyZone(hadRaw, fixed.x, fixed.y);
       requestDraw();
       return;
     }
 
     const t = elapsedTime;
-    const zoneNow = classifyZone(hadRaw, x, y);
-    const onFlag = (zoneNow === "T") ? 1 : 0;
+    const zoneNow = classifyZone(hadRaw, fixed.x, fixed.y);
     dbg.zone = zoneNow;
 
-    // stats
+    const onFlag = (zoneNow === "T") ? 1 : 0;
+
     if (!gazeStats.hasStarted){
-      gazeStats.hasStarted = true;
-      gazeStats.lastTime = t;
-      gazeStats.lastZone = zoneNow;
-      gazeStats.totalSamples = 1;
-      if (hadRaw) gazeStats.validSamples = 1; else gazeStats.invalidSamples = 1;
+      gazeStats.hasStarted=true;
+      gazeStats.lastTime=t;
+      gazeStats.lastZone=zoneNow;
+      gazeStats.totalSamples=1;
+      if (hadRaw) gazeStats.validSamples=1; else gazeStats.invalidSamples=1;
     } else {
       const dt = t - (gazeStats.lastTime || t);
       gazeStats.lastTime = t;
@@ -635,27 +604,24 @@
 
       gazeStats.totalSamples++;
       if (hadRaw) gazeStats.validSamples++;
-      else        gazeStats.invalidSamples++;
+      else gazeStats.invalidSamples++;
     }
 
-    // OFF detection
+    // OFF logic
     if (onFlag === 1){
       if (offState.candidate || offState.inOff || offState.votesStart != null){
-        offState.candidate = false;
-        offState.candidateStart = null;
-        offState.inOff = false;
-        offState.dir = "";
-        offState.votes = { L:0, R:0, U:0, D:0 };
-        offState.votesStart = null;
+        offState.candidate=false; offState.candidateStart=null;
+        offState.inOff=false; offState.dir="";
+        offState.votes={L:0,R:0,U:0,D:0}; offState.votesStart=null;
       }
     } else {
       if (gazeStats.lastZone === "T" && !offState.candidate){
-        offState.candidate = true;
-        offState.candidateStart = t;
-        offState.inOff = false;
-        offState.dir = "";
-        offState.votes = { L:0, R:0, U:0, D:0 };
-        offState.votesStart = t;
+        offState.candidate=true;
+        offState.candidateStart=t;
+        offState.inOff=false;
+        offState.dir="";
+        offState.votes={L:0,R:0,U:0,D:0};
+        offState.votesStart=t;
       }
 
       if (zoneNow === "L") offState.votes.L++;
@@ -672,45 +638,38 @@
         ].sort((a,b)=>b[1]-a[1]);
 
         const [bestDir, bestVotes] = arr[0];
-        if (bestVotes >= DIR_MIN_VOTES){
-          offState.dir = bestDir;
-        }
-        offState.votes = { L:0, R:0, U:0, D:0 };
-        offState.votesStart = t;
+        if (bestVotes >= DIR_MIN_VOTES) offState.dir = bestDir;
+
+        offState.votes={L:0,R:0,U:0,D:0};
+        offState.votesStart=t;
       }
 
       if (offState.candidate && !offState.inOff &&
           offState.candidateStart != null &&
           (t - offState.candidateStart) >= OFF_MIN_MS){
 
-        offState.inOff = true;
+        offState.inOff=true;
         if (offState.dir){
           gazeStats.offEvents++;
-          if (offState.dir === "L")      gazeStats.offLeftEvents++;
-          else if (offState.dir === "R") gazeStats.offRightEvents++;
-          else if (offState.dir === "U") gazeStats.offUpEvents++;
-          else if (offState.dir === "D") gazeStats.offDownEvents++;
+          if (offState.dir==="L") gazeStats.offLeftEvents++;
+          else if (offState.dir==="R") gazeStats.offRightEvents++;
+          else if (offState.dir==="U") gazeStats.offUpEvents++;
+          else if (offState.dir==="D") gazeStats.offDownEvents++;
         }
       }
     }
 
-    dbg.dir = offState.dir || "";
-
-    // timeline row
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
 
-    let xOut = "";
-    let yOut = "";
-    if (hadRaw && zoneNow !== "O"){
-      xOut = Math.round(x);
-      yOut = Math.round(y);
+    let xOut="", yOut="";
+    if (hadRaw && fixed.x != null && fixed.y != null){
+      xOut = Math.round(fixed.x);
+      yOut = Math.round(fixed.y);
     }
 
     let dirSample = "";
-    if (onFlag === 0 && offState.dir){
-      dirSample = offState.dir;
-    }
+    if (onFlag===0 && offState.dir) dirSample = offState.dir;
 
     gazeTimeline.push({
       ms,
@@ -731,19 +690,9 @@
     const pid = (pidInput.value || "").trim();
     if (!gazeStats.hasStarted && gazeStats.totalSamples === 0) return "";
     const head = [
-      "pid",
-      "total_on_ms",
-      "total_off_ms",
-      "total_samples",
-      "valid_samples",
-      "invalid_samples",
-      "off_events",
-      "off_left_events",
-      "off_right_events",
-      "off_up_events",
-      "off_down_events",
-      "time_task_ms",
-      "time_deviation_ms"
+      "pid","total_on_ms","total_off_ms","total_samples","valid_samples","invalid_samples",
+      "off_events","off_left_events","off_right_events","off_up_events","off_down_events",
+      "time_task_ms","time_deviation_ms"
     ];
     const row = [
       pid,
@@ -790,20 +739,30 @@
       startBtn.disabled = false;
       return;
     }
+
     window.saveDataAcrossSessions = false;
+
     try{
+      // ✅ חשוב: Kalman מובנה
+      if (webgazer.applyKalmanFilter) webgazer.applyKalmanFilter(true);
+
+      // ✅ Regression יציב יחסית
+      if (webgazer.setRegression) webgazer.setRegression("ridge");
+
       webgazer
         .setGazeListener(handleGaze)
         .showVideo(false)
         .showFaceOverlay(false)
         .showPredictionPoints(false)
         .begin();
+
     } catch(e){
       console.error("WebGazer error:", e);
       alert("לא ניתן להפעיל את מעקב העיניים. ניתן להמשיך במשימה ללא המערכת.");
       startBtn.disabled = false;
       return;
     }
+
     setTimeout(startCalibrationSequence, 900);
   }
 
@@ -859,8 +818,6 @@
     calibrationIndex++;
     if (calibrationIndex >= calibrationPoints.length){
       calibrationActive = false;
-
-      // NEW: נקודה 18 במרכז למשך CENTER_HOLD_MS, בלי קליק.
       startCenterHold();
     } else {
       draw();
@@ -873,7 +830,6 @@
     centerSamples = [];
     resetSmoothing();
 
-    // נציג הודעה קצרה לפני שמתחילים את הספירה (שקופה לנבדק)
     overlayTitle.textContent = "שלב אחרון בכיול";
     overlayText.textContent = "כעת עליך להתמיד במבט על הנקודה במרכז למשך מספר שניות (בלי להזיז את הראש).";
     overlayContinue.textContent = "התחל";
@@ -899,25 +855,43 @@
     };
   }
 
+  // robust median/trim
+  function median(arr){
+    if (!arr.length) return null;
+    const a = [...arr].sort((x,y)=>x-y);
+    const m = Math.floor(a.length/2);
+    return a.length % 2 ? a[m] : (a[m-1]+a[m])/2;
+  }
+
   function finalizeCenterHold(){
     centerHoldActive = false;
 
-    // מחשבים offset מהממוצע של הדגימות שנאספו בזמן החזקת המרכז
     if (centerSamples.length >= CENTER_MIN_SAMPLES){
       const { innerRect } = getZoneRects();
-      const cx = (innerRect.left + innerRect.right) / 2;
-      const cy = (innerRect.top  + innerRect.bottom) / 2;
+      const targetCx = (innerRect.left + innerRect.right) / 2;
+      const targetCy = (innerRect.top  + innerRect.bottom) / 2;
 
-      const mx = centerSamples.reduce((a,s)=>a+s.x,0) / centerSamples.length;
-      const my = centerSamples.reduce((a,s)=>a+s.y,0) / centerSamples.length;
+      // חותכים outliers: נשמור רק דגימות קרובות למרכז (לפי מרחק למידיאן)
+      const xs = centerSamples.map(s=>s.x);
+      const ys = centerSamples.map(s=>s.y);
+      const mx = median(xs);
+      const my = median(ys);
 
-      gazeFix.offsetX = (cx - mx);
-      gazeFix.offsetY = (cy - my);
+      const withDist = centerSamples.map(s => ({...s, d: Math.hypot(s.x-mx, s.y-my)}))
+                                    .sort((a,b)=>a.d-b.d);
+
+      const keepN = Math.max(CENTER_MIN_SAMPLES, Math.floor(withDist.length * 0.70)); // משאירים 70%
+      const kept = withDist.slice(0, keepN);
+
+      const avgX = kept.reduce((a,s)=>a+s.x,0) / kept.length;
+      const avgY = kept.reduce((a,s)=>a+s.y,0) / kept.length;
+
+      gazeFix.offsetX = (targetCx - avgX);
+      gazeFix.offsetY = (targetCy - avgY);
       gazeFix.hasOffset = true;
 
       resetSmoothing();
     } else {
-      // לא מספיק דגימות — עדיין נסיים כיול, אבל נודיע לך
       console.warn("Center hold: not enough samples", centerSamples.length);
     }
 
@@ -926,10 +900,7 @@
     flipBtn.disabled = false;
 
     overlayTitle.textContent = "המערכת מכויילת";
-    overlayText.textContent =
-      centerSamples.length >= CENTER_MIN_SAMPLES
-        ? `הכיול הושלם + יישור מרכז. (samples=${centerSamples.length})`
-        : `הכיול הושלם, אבל לא נאספו מספיק דגימות ליישור מרכז. (samples=${centerSamples.length})`;
+    overlayText.textContent = `הכיול הושלם + יישור מרכז (samples=${centerSamples.length}).`;
     overlayContinue.textContent = "התחל המשימה";
     overlay.style.display = "grid";
     overlayContinue.onclick = () => {
@@ -942,8 +913,7 @@
 
   function showCalibrationIntro(){
     overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים";
-    overlayText.textContent =
-      "יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.";
+    overlayText.textContent = "יש לאשר פתיחת מצלמה. לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.";
     overlayContinue.textContent = "פתח מצלמה וכייל";
     overlay.style.display = "grid";
     overlayContinue.onclick = () => {
@@ -952,7 +922,7 @@
     };
   }
 
-  // ======================= משימות (Connect the dots) =======================
+  // ======================= משימות =======================
   function now(){ return performance.now(); }
 
   function randomBetween(min,max){ return min + Math.random() * (max - min); }
@@ -1069,10 +1039,7 @@
       handleCalibrationClick(ev);
       return;
     }
-    if (centerHoldActive){
-      // בזמן נקודת מרכז אין קליקים
-      return;
-    }
+    if (centerHoldActive) return;
     if (!running || !currentTask || pendingNextTaskPoints !== null) return;
 
     const rect = canvas.getBoundingClientRect();
@@ -1306,7 +1273,7 @@
     draw();
   }
 
-  window.addEventListener("resize", () => { resizeCanvas(); });
+  window.addEventListener("resize", resizeCanvas);
 
   startBtn.addEventListener("click", () => {
     if (!isCalibrated){
