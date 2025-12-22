@@ -467,7 +467,10 @@
     const midEyes = { x:(leftEye.x+rightEye.x)/2, y:(leftEye.y+rightEye.y)/2 };
     const eyeDist = Math.max(1e-6, dist(leftEye, rightEye));
 
-    const yaw = (nose.x - midEyes.x) / eyeDist;
+    // ===== FIX #2: FLIP YAW SIGN =====
+    // במצלמה, "הפניית ראש ימינה" מזיזה את האף שמאלה בפריים → סימן הפוך.
+    const yaw = -((nose.x - midEyes.x) / eyeDist);
+
     const pitch = (nose.y - midEyes.y) / eyeDist;
 
     return {yaw, pitch};
@@ -521,10 +524,45 @@
   let faceMesh = null;
   let headLoopOn = false;
 
+  // ===== FIX #1: choose *only* WebGazer video (never #fmVideo / never first <video>) =====
+  function getWebgazerVideoElementStrict(){
+    try{
+      if (window.webgazer && typeof webgazer.getVideoElement === "function"){
+        const v = webgazer.getVideoElement();
+        if (v && v.tagName === "VIDEO") return v;
+      }
+    } catch(e){}
+    const byId = document.getElementById("webgazerVideoFeed");
+    if (byId && byId.tagName === "VIDEO") return byId;
+    return null;
+  }
+
   async function initFaceMeshUsingWebgazerVideo(){
     if (head.ready) return;
 
     try{
+      const wgVideo = getWebgazerVideoElementStrict();
+      if (!wgVideo){
+        miniStatus.textContent = "סטטוס: Head tracking לא הופעל (לא נמצא webgazerVideoFeed / getVideoElement)";
+        return;
+      }
+
+      // חשוב: נחכה שהמצלמה באמת מוכנה
+      const waitUntilReady = async () => {
+        const t0 = performance.now();
+        while (performance.now() - t0 < 4000){
+          if (wgVideo.readyState >= 2) return true;
+          await new Promise(r => setTimeout(r, 120));
+        }
+        return false;
+      };
+
+      const ok = await waitUntilReady();
+      if (!ok){
+        miniStatus.textContent = "סטטוס: Head tracking לא הופעל (וידאו של WebGazer לא הגיע ל-readyState>=2)";
+        return;
+      }
+
       faceMesh = new FaceMesh.FaceMesh({
         locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
       });
@@ -551,17 +589,6 @@
         head.yawSm = ema(head.yawSm, yaw, HEAD_SMOOTH_ALPHA);
         head.pitchSm = ema(head.pitchSm, pitch, HEAD_SMOOTH_ALPHA);
       });
-
-      // Find the same video element WebGazer uses
-      const wgVideo =
-        (window.webgazer && webgazer.getVideoElement) ? webgazer.getVideoElement() :
-        document.getElementById("webgazerVideoFeed") ||
-        document.querySelector("video");
-
-      if (!wgVideo){
-        miniStatus.textContent = "סטטוס: Head tracking לא הופעל (לא נמצא video של WebGazer)";
-        return;
-      }
 
       headLoopOn = true;
       const loop = async () => {
@@ -1281,8 +1308,16 @@
       return;
     }
 
-    // Head tracking starts AFTER WebGazer begins, and uses the same video element
-    initFaceMeshUsingWebgazerVideo();
+    // ===== FIX #1 continued: delay + strict picking of WG video =====
+    setTimeout(() => {
+      const v = getWebgazerVideoElementStrict();
+      if (v){
+        console.log("WG video OK:", v, "readyState:", v.readyState, "srcObject:", !!v.srcObject);
+      } else {
+        console.log("WG video NOT found (strict).");
+      }
+      initFaceMeshUsingWebgazerVideo();
+    }, 800);
 
     setTimeout(startCalibrationSequence, 900);
   }
