@@ -173,25 +173,20 @@
     lineAvoidDistance: 16
   };
 
-  // מסגרת פנימית (אזור המשימה)
+  // מסגרת פנימית (אזור המשימה) – נשאר רק בשביל פריסה ויזואלית
   const FRAME_MARGIN_X_RATIO = 0.06;
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // OFF "אמיתי" – סף זמן (עכשיו OFF נספר בעיקר לפי HEAD)
+  // OFF "אמיתי" – סף זמן
   const OFF_MIN_MS = 1000;
 
-  // חלון החלטת כיוון (fallback gaze-only)
-  const DIR_WINDOW_MS = 400;
-  const DIR_DOMINANCE_RATIO = 0.45;
-  const DIR_DEADZONE_RATIO = 0.10;
-
-  // סינון לתצוגת הנקודה האדומה + לסיווג zones
+  // סינון לתצוגת הנקודה האדומה
   const SMOOTH_ALPHA = 0.35;
   const MAX_STEP_PX  = 260;
   const MEDIAN_WIN   = 3;
 
-  // שלב מרכז
+  // שלב מרכז (ל־offset gaze)
   const CENTER_HOLD_MS = 5000;
   const CENTER_MIN_SAMPLES = 12;
   const CENTER_MAX_STD_PX = 120;
@@ -199,62 +194,12 @@
   const MAX_CENTER_ATTEMPTS = 1;
   const UNSTABLE_AUTO_MS = 2000;
 
-  // שלב בדיקת X (ימין/שמאל)
-  const XCHECK_RIGHT_MS = 4000;
-  const XCHECK_LEFT_MS  = 4000;
-  const XCHECK_MIN_SAMPLES = 12;
-  const XCHECK_MIN_DELTA_PX = 30;
+  // בדיקת ימין/שמאל לעיניים
+  const XCHECK_RIGHT_MS = 2500;
+  const XCHECK_LEFT_MS  = 2500;
 
-  // להשאיר נקודה אדומה
+  // UI debug
   const DRAW_GAZE_DOT = true;
-
-  // ======================= Head direction (FaceMesh) =======================
-  // ספים לזיהוי "הראש פונה החוצה"
-  const HEAD_YAW_THRESHOLD   = 0.18; // R/L
-  const HEAD_PITCH_THRESHOLD = 0.16; // U/D
-  const HEAD_SMOOTH_ALPHA    = 0.25;
-
-  // ======================= שליחה ל־Drive =======================
-  const SCRIPT_URL =
-    "https://script.google.com/macros/s/AKfycbzVinB7VZA9P3mkKYpfYuykv6JXF62w70s7I98iOqU2YhRyigD0lcBndONHsx5rdhRnRA/exec";
-
-  function sendCsvToDrive(csvContent, label) {
-    if (!csvContent) return;
-    const rawPid = (pidInput.value || "").trim();
-    const safePid = rawPid ? rawPid.replace(/[^a-zA-Z0-9_-]/g, "") : "PID";
-    const ts = new Date().toISOString().replace(/[:.]/g, "");
-    const filename = `${safePid}_${label}_${ts}.csv`;
-    const payload = { filename, mimeType: "text/csv", content: csvContent };
-
-    fetch(SCRIPT_URL, {
-      method: "POST",
-      mode: "no-cors",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    }).catch(()=>{});
-  }
-
-  // ======================= טפסים =======================
-  const FORM_ID = "1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA";
-  const ENTRY_PID             = "entry.404955311";
-  const ENTRY_TOTAL_TASKS     = "entry.1331557537";
-  const ENTRY_POINTS_PER_TASK = "entry.742152065";
-  const ENTRY_ERRORS_PER_TASK = "entry.1634677467";
-  const ENTRY_DUR_PER_TASK    = "entry.529234118";
-  const ENTRY_EXPERIMENT_TIME = "entry.883845532";
-  const FORM_BASE_URL =
-    "https://docs.google.com/forms/d/e/" + FORM_ID + "/viewform?usp=pp_url&";
-
-  const LOG_FORM_ID = "1FAIpQLSdrl006D8HAWo0YfsdWUMppGEewGOp8Snm3ANot8OxzSBkusA";
-  const LOG_FORM_BASE =
-    "https://docs.google.com/forms/d/e/" + LOG_FORM_ID + "/formResponse?";
-  const LOG_ENTRY_PID        = "entry.152946855";
-  const LOG_ENTRY_TASK       = "entry.781109584";
-  const LOG_ENTRY_N_POINTS   = "entry.347168050";
-  const LOG_ENTRY_ERRORS     = "entry.1932703164";
-  const LOG_ENTRY_DURATION   = "entry.1227866932";
-  const LOG_ENTRY_COMPLETED  = "entry.1100470565";
-  const LOG_ENTRY_TIMESTAMP  = "entry.1243807469";
 
   // ======================= DOM =======================
   const canvas = document.getElementById("stage");
@@ -268,23 +213,21 @@
   const overlayTitle = document.getElementById("overlayTitle");
   const overlayText = document.getElementById("overlayText");
   const overlayContinue = document.getElementById("overlayContinue");
-  const miniStatus = document.getElementById("miniStatus");
+  const miniStatusEl = document.getElementById("miniStatus");
 
-  // FaceMesh video (hidden; not used as camera source anymore)
-  const fmVideo = document.getElementById("fmVideo");
+  function miniStatus(txt){
+    miniStatusEl.textContent = txt;
+  }
 
   // ======================= STATE =======================
   let running = false;
   let sessionStart = null;
-  let experimentStartIso = null;
   let tickId = null;
-  let tasks = [];
   let taskCounter = 0;
   let currentTask = null;
-  let pendingNextTaskPoints = null;
   let sessionEnded = false;
 
-  // כיול נקודות
+  // כיול נקודות (17 לחיצות)
   let isCalibrated = false;
   const CALIB_POINTS_TOTAL = 17;
   let calibrationActive = false;
@@ -303,10 +246,7 @@
   let xCheckSamplesRight = [];
   let xCheckSamplesLeft  = [];
 
-  // פריסת נקודות
-  const taskLayouts = [];
-
-  // ======================= mapping פנימי =======================
+  // mapping פנימי (נשארים למקרה הצורך)
   let FLIP_X = false;
   let FLIP_Y = false;
   let SWAP_XY = false;
@@ -391,8 +331,105 @@
     return { x: gazeFix.smoothX, y: gazeFix.smoothY, rawX: rawFixedX, rawY: rawFixedY };
   }
 
-  // ======================= Zones (fallback gaze) =======================
-  function getZoneRects(){
+  // ======================= Head tracking (MediaPipe FaceMesh) =======================
+  // ברירת מחדל: הופכים ימין/שמאל כי ברוב המצלמות הוידאו "מראה" (זה תיקן אצלך: ימינה נכתב שמאלה)
+  const head = {
+    ok: false,
+    lastTs: 0,
+    yaw: 0,    // normalized
+    pitch: 0,  // normalized
+    yawSign: -1,
+    pitchSign: 1,
+    // ספים (תוכל לכוונן):
+    // קטן יותר => רגיש יותר; גדול יותר => צריך הטיה חזקה יותר
+    yawThr: 0.18,
+    pitchThr: 0.18,
+    dir: "C"
+  };
+
+  let faceMesh = null;
+  let headLoopRunning = false;
+
+  function classifyHeadDir(){
+    if (!head.ok) return "C";
+    const y = head.yaw * head.yawSign;
+    const p = head.pitch * head.pitchSign;
+
+    const ay = Math.abs(y);
+    const ap = Math.abs(p);
+
+    if (ay < head.yawThr && ap < head.pitchThr) return "C";
+    if (ay >= ap) return y > 0 ? "R" : "L";
+    return p > 0 ? "D" : "U";
+  }
+
+  async function initHeadTracking(){
+    try{
+      // משתמשים בוידאו של WebGazer כדי לא לפתוח מצלמה נוספת
+      const wgVideo = document.getElementById("webgazerVideoFeed");
+      if (!wgVideo){
+        miniStatus("סטטוס: Head tracking לא פעיל (לא נמצא webgazerVideoFeed)");
+        return;
+      }
+
+      faceMesh = new FaceMesh.FaceMesh({
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+      });
+
+      faceMesh.setOptions({
+        maxNumFaces: 1,
+        refineLandmarks: true,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      });
+
+      faceMesh.onResults((results) => {
+        const now = performance.now();
+        head.lastTs = now;
+
+        const lm = results.multiFaceLandmarks && results.multiFaceLandmarks[0];
+        if (!lm){
+          head.ok = false;
+          head.dir = "C";
+          return;
+        }
+
+        // 33 ו-263: קצוות עיניים; 1: קצה אף
+        const L = lm[33], R = lm[263], N = lm[1];
+        const midX = (L.x + R.x) / 2;
+        const midY = (L.y + R.y) / 2;
+        const dx = (R.x - L.x);
+        const dy = (R.y - L.y);
+        const faceW = Math.hypot(dx, dy) || 1e-6;
+
+        head.yaw   = (N.x - midX) / faceW;
+        head.pitch = (N.y - midY) / faceW;
+        head.ok = true;
+        head.dir = classifyHeadDir();
+      });
+
+      if (headLoopRunning) return;
+      headLoopRunning = true;
+
+      const loop = async () => {
+        if (!headLoopRunning) return;
+        const v = document.getElementById("webgazerVideoFeed");
+        if (v && v.readyState >= 2 && !v.paused && !v.ended){
+          try { await faceMesh.send({image: v}); } catch(e){}
+        }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+
+      miniStatus("סטטוס: Head tracking פעיל");
+    }catch(e){
+      console.error("Head tracking init error:", e);
+      miniStatus("סטטוס: Head tracking לא פעיל (שגיאת אתחול)");
+    }
+  }
+
+  // ======================= Task rects (למיקום/כיול/מסגרת) =======================
+  function getTaskRects(){
     const rect = canvas.getBoundingClientRect();
     const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
     const marginY = Math.max(rect.height * FRAME_MARGIN_Y_RATIO, 40);
@@ -405,267 +442,59 @@
     return { canvasRect: rect, innerRect, marginX, marginY };
   }
 
-  function classifyZone(hadRaw, x, y){
-    if (!hadRaw || x == null || y == null) return "O";
-
-    const { canvasRect, innerRect } = getZoneRects();
-
-    const inCanvas =
-      x >= canvasRect.left && x <= canvasRect.right &&
-      y >= canvasRect.top  && y <= canvasRect.bottom;
-    if (!inCanvas) return "O";
-
-    const inTask =
-      x >= innerRect.left && x <= innerRect.right &&
-      y >= innerRect.top  && y <= innerRect.bottom;
-    if (inTask) return "T";
-
-    const cx = (innerRect.left + innerRect.right) / 2;
-    const cy = (innerRect.top  + innerRect.bottom) / 2;
-    const dx = x - cx;
-    const dy = y - cy;
-
-    const deadX = (innerRect.right - innerRect.left) * DIR_DEADZONE_RATIO;
-    const deadY = (innerRect.bottom - innerRect.top) * DIR_DEADZONE_RATIO;
-    if (Math.abs(dx) < deadX && Math.abs(dy) < deadY) return "O";
-
-    if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? "R" : "L";
-    return dy >= 0 ? "D" : "U";
-  }
-
-  // ======================= Head tracking (FaceMesh) =======================
-  const head = {
-    ready: false,
-    face: false,
-    yaw: 0,
-    pitch: 0,
-    yawSm: 0,
-    pitchSm: 0,
-    neutralYaw: 0,
-    neutralPitch: 0,
-    calibrated: false
-  };
-
-  function lm(landmarks, idx){
-    const p = landmarks[idx];
-    return {x:p.x, y:p.y};
-  }
-  function dist(a,b){
-    const dx=a.x-b.x, dy=a.y-b.y;
-    return Math.hypot(dx,dy);
-  }
-  function ema(prev, next, a){
-    return prev + a*(next-prev);
-  }
-
-  // yaw/pitch proxy
-  function computeYawPitch(landmarks){
-    const leftEye = lm(landmarks, 33);
-    const rightEye = lm(landmarks, 263);
-    const nose = lm(landmarks, 1);
-
-    const midEyes = { x:(leftEye.x+rightEye.x)/2, y:(leftEye.y+rightEye.y)/2 };
-    const eyeDist = Math.max(1e-6, dist(leftEye, rightEye));
-
-    // ===== FIX #2: FLIP YAW SIGN =====
-    // במצלמה, "הפניית ראש ימינה" מזיזה את האף שמאלה בפריים → סימן הפוך.
-    const yaw = -((nose.x - midEyes.x) / eyeDist);
-
-    const pitch = (nose.y - midEyes.y) / eyeDist;
-
-    return {yaw, pitch};
-  }
-
-  function classifyHeadDir(yawRel, pitchRel){
-    const ay = Math.abs(yawRel);
-    const ap = Math.abs(pitchRel);
-
-    const yawOff = ay >= HEAD_YAW_THRESHOLD;
-    const pitOff = ap >= HEAD_PITCH_THRESHOLD;
-
-    if (!yawOff && !pitOff) return "CENTER";
-
-    if (ay >= ap){
-      return yawRel < 0 ? "L" : "R";
-    } else {
-      return pitchRel < 0 ? "U" : "D";
-    }
-  }
-
-  function startHeadNeutralCalibration(){
-    head.neutralYaw = 0;
-    head.neutralPitch = 0;
-    head.calibrated = false;
-    head._calSamples = [];
-  }
-  function sampleHeadNeutral(){
-    if (!head.ready || !head.face) return;
-    head._calSamples.push({yaw: head.yawSm, pitch: head.pitchSm});
-  }
-  function finalizeHeadNeutral(){
-    const s = head._calSamples || [];
-    if (!s.length){
-      head.calibrated = false;
-      return;
-    }
-    const my = s.reduce((a,p)=>a+p.yaw,0)/s.length;
-    const mp = s.reduce((a,p)=>a+p.pitch,0)/s.length;
-    head.neutralYaw = my;
-    head.neutralPitch = mp;
-    head.calibrated = true;
-  }
-  function getHeadRel(){
-    const yawRel = head.yawSm - head.neutralYaw;
-    const pitRel = head.pitchSm - head.neutralPitch;
-    return { yawRel, pitRel };
-  }
-
-  // ======= IMPORTANT FIX: FaceMesh uses WebGazer's VIDEO (no second camera open) =======
-  let faceMesh = null;
-  let headLoopOn = false;
-
-  // ===== FIX #1: choose *only* WebGazer video (never #fmVideo / never first <video>) =====
-  function getWebgazerVideoElementStrict(){
-    try{
-      if (window.webgazer && typeof webgazer.getVideoElement === "function"){
-        const v = webgazer.getVideoElement();
-        if (v && v.tagName === "VIDEO") return v;
-      }
-    } catch(e){}
-    const byId = document.getElementById("webgazerVideoFeed");
-    if (byId && byId.tagName === "VIDEO") return byId;
-    return null;
-  }
-
-  async function initFaceMeshUsingWebgazerVideo(){
-    if (head.ready) return;
-
-    try{
-      const wgVideo = getWebgazerVideoElementStrict();
-      if (!wgVideo){
-        miniStatus.textContent = "סטטוס: Head tracking לא הופעל (לא נמצא webgazerVideoFeed / getVideoElement)";
-        return;
-      }
-
-      // חשוב: נחכה שהמצלמה באמת מוכנה
-      const waitUntilReady = async () => {
-        const t0 = performance.now();
-        while (performance.now() - t0 < 4000){
-          if (wgVideo.readyState >= 2) return true;
-          await new Promise(r => setTimeout(r, 120));
-        }
-        return false;
-      };
-
-      const ok = await waitUntilReady();
-      if (!ok){
-        miniStatus.textContent = "סטטוס: Head tracking לא הופעל (וידאו של WebGazer לא הגיע ל-readyState>=2)";
-        return;
-      }
-
-      faceMesh = new FaceMesh.FaceMesh({
-        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
-      });
-
-      faceMesh.setOptions({
-        maxNumFaces: 1,
-        refineLandmarks: true,
-        minDetectionConfidence: 0.6,
-        minTrackingConfidence: 0.6
-      });
-
-      faceMesh.onResults((results) => {
-        const faces = results.multiFaceLandmarks || [];
-        if (!faces.length){
-          head.face = false;
-          return;
-        }
-        head.face = true;
-
-        const {yaw, pitch} = computeYawPitch(faces[0]);
-        head.yaw = yaw;
-        head.pitch = pitch;
-
-        head.yawSm = ema(head.yawSm, yaw, HEAD_SMOOTH_ALPHA);
-        head.pitchSm = ema(head.pitchSm, pitch, HEAD_SMOOTH_ALPHA);
-      });
-
-      headLoopOn = true;
-      const loop = async () => {
-        if (!headLoopOn) return;
-        if (wgVideo.readyState >= 2){
-          await faceMesh.send({ image: wgVideo });
-        }
-        requestAnimationFrame(loop);
-      };
-      requestAnimationFrame(loop);
-
-      head.ready = true;
-      miniStatus.textContent = "סטטוס: מצלמה פעילה (WebGazer + Head)";
-    } catch(e){
-      miniStatus.textContent = "סטטוס: Head tracking לא הופעל (ממשיך ללא Head)";
-    }
+  function isInsideRect(x,y,r){
+    return x>=r.left && x<=r.right && y>=r.top && y<=r.bottom;
   }
 
   // ======================= Stats / timeline =======================
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastOnFlag: 0,
     totalOnMs: 0,
     totalOffMs: 0,
     totalSamples: 0,
     validSamples: 0,
     invalidSamples: 0,
-
-    // OFF by HEAD (primary)
     offEvents: 0,
     offLeftEvents: 0,
     offRightEvents: 0,
     offUpEvents: 0,
     offDownEvents: 0,
-    offUnknownEvents: 0,
-
-    // Head-only summary
-    headAwayEvents: 0,
-    headLeftEvents: 0,
-    headRightEvents: 0,
-    headUpEvents: 0,
-    headDownEvents: 0,
-    headUnknownEvents: 0,
-
     timeTaskMs: 0,
     timeDeviationMs: 0
   };
 
-  // OFF state (HEAD primary)
   const offState = {
-    inOff: false,
+    candidate: false,
     candidateStart: null,
-    dir: "",
-    source: "", // "head" | "gaze"
-    lastDir: "CENTER"
+    inOff: false,
+    dir: ""
   };
 
   const gazeTimeline = [];
 
   function resetGazeStats(){
     Object.assign(gazeStats,{
-      hasStarted:false,lastTime:null,lastOnFlag:0,
+      hasStarted:false,lastTime:null,
       totalOnMs:0,totalOffMs:0,totalSamples:0,validSamples:0,invalidSamples:0,
-      offEvents:0,offLeftEvents:0,offRightEvents:0,offUpEvents:0,offDownEvents:0,offUnknownEvents:0,
-      headAwayEvents:0,headLeftEvents:0,headRightEvents:0,headUpEvents:0,headDownEvents:0,headUnknownEvents:0,
+      offEvents:0,offLeftEvents:0,offRightEvents:0,offUpEvents:0,offDownEvents:0,
       timeTaskMs:0,timeDeviationMs:0
     });
-
-    offState.inOff=false;
-    offState.candidateStart=null;
-    offState.dir="";
-    offState.source="";
-    offState.lastDir="CENTER";
-
+    offState.candidate=false; offState.candidateStart=null;
+    offState.inOff=false; offState.dir="";
     gazeTimeline.length=0;
     resetSmoothing();
+  }
+
+  function meanOf(arr){
+    if (!arr.length) return null;
+    return arr.reduce((a,v)=>a+v,0)/arr.length;
+  }
+  function stdOf(arr){
+    if (arr.length < 2) return 9999;
+    const m = arr.reduce((a,v)=>a+v,0)/arr.length;
+    const v = arr.reduce((a,vv)=>a+(vv-m)*(vv-m),0)/(arr.length-1);
+    return Math.sqrt(v);
   }
 
   function buildEyeCsv(){
@@ -673,9 +502,8 @@
     if (!gazeStats.hasStarted && gazeStats.totalSamples === 0) return "";
     const headRow = [
       "pid","total_on_ms","total_off_ms","total_samples","valid_samples","invalid_samples",
-      "off_events","off_unknown_events","off_left_events","off_right_events","off_up_events","off_down_events",
-      "time_task_ms","time_deviation_ms",
-      "head_away_events","head_left_events","head_right_events","head_up_events","head_down_events","head_unknown_events"
+      "off_events","off_left_events","off_right_events","off_up_events","off_down_events",
+      "time_task_ms","time_deviation_ms"
     ];
     const row = [
       pid,
@@ -685,14 +513,12 @@
       gazeStats.validSamples,
       gazeStats.invalidSamples,
       gazeStats.offEvents,
-      gazeStats.offUnknownEvents,
       gazeStats.offLeftEvents,
       gazeStats.offRightEvents,
       gazeStats.offUpEvents,
       gazeStats.offDownEvents,
       Math.round(gazeStats.timeTaskMs),
-      Math.round(gazeStats.timeDeviationMs),
-      gazeStats.headAwayEvents, gazeStats.headLeftEvents, gazeStats.headRightEvents, gazeStats.headUpEvents, gazeStats.headDownEvents, gazeStats.headUnknownEvents
+      Math.round(gazeStats.timeDeviationMs)
     ].join(",");
     return headRow.join(",") + "\n" + row + "\n";
   }
@@ -700,31 +526,11 @@
   function buildEyeTimelineCsv(){
     const pid = (pidInput.value || "").trim();
     if (!gazeTimeline.length) return "";
-    const headCols = [
-      "pid","task_index","ms",
-      "zone","x_fixed","y_fixed","on_screen",
-      "off_direction","off_source",
-      "face_present","head_dir","head_yaw_rel","head_pitch_rel"
-    ];
+    const headRow = ["pid","task_index","ms","x_rawfixed","y_rawfixed","gaze_valid","on_screen","off_direction","head_yaw","head_pitch","head_ok"];
     const rows = gazeTimeline.map(s =>
-      [
-        pid, s.task, s.ms,
-        s.zone || "", s.x, s.y, s.on,
-        s.offdir, s.offsrc,
-        s.face, s.hdir, s.hyaw, s.hpit
-      ].join(",")
+      [pid, s.task, s.ms, s.x, s.y, s.v, s.on, s.dir, s.hy, s.hp, s.hok].join(",")
     );
-    return headCols.join(",") + "\n" + rows.join("\n");
-  }
-
-  function buildPointsLayoutCsv(){
-    const pid = (pidInput.value || "").trim();
-    if (!taskLayouts.length) return "";
-    const head = ["pid","task_index","point_index","number","x_screen","y_screen"];
-    const rows = taskLayouts.map(row =>
-      [pid,row.task_index,row.point_index,row.number,Math.round(row.x_screen),Math.round(row.y_screen)].join(",")
-    );
-    return head.join(",") + "\n" + rows.join("\n");
+    return headRow.join(",") + "\n" + rows.join("\n");
   }
 
   // ======================= Drawing helpers =======================
@@ -769,7 +575,7 @@
 
     // -------- החזקת מרכז
     if (holdActive){
-      const { marginX, marginY } = getZoneRects();
+      const { marginX, marginY } = getTaskRects();
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       const cx = marginX + (w - 2*marginX)/2;
@@ -795,7 +601,7 @@
 
     // -------- XCheck: נקודה ימינה/שמאלה
     if (xCheckActive){
-      const { marginX, marginY } = getZoneRects();
+      const { marginX, marginY } = getTaskRects();
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
 
@@ -890,18 +696,7 @@
     drawGazeDot();
   }
 
-  // ======================= כיול מרכז: תמיד נגמר ולא נתקע =======================
-  function meanOf(arr){
-    if (!arr.length) return null;
-    return arr.reduce((a,v)=>a+v,0)/arr.length;
-  }
-  function stdOf(arr){
-    if (arr.length < 2) return 9999;
-    const m = arr.reduce((a,v)=>a+v,0)/arr.length;
-    const v = arr.reduce((a,vv)=>a+(vv-m)*(vv-m),0)/(arr.length-1);
-    return Math.sqrt(v);
-  }
-
+  // ======================= כיול מרכז (offset) =======================
   function startCenterHold(){
     if (holdWatchdogId) clearTimeout(holdWatchdogId);
 
@@ -909,13 +704,9 @@
     holdStart = performance.now();
     holdSamples = [];
     resetSmoothing();
-
-    // התחלת כיול "נייטרל" לראש בזמן ההחזקה במרכז
-    startHeadNeutralCalibration();
-
     draw();
 
-    // watchdog
+    // watchdog: גם אם משהו משתבש – אחרי 7 שניות סוגרים בכוח
     holdWatchdogId = setTimeout(() => {
       if (holdActive){
         holdActive = false;
@@ -926,10 +717,7 @@
     const loop = () => {
       if (!holdActive) return;
       const elapsed = performance.now() - holdStart;
-
-      sampleHeadNeutral();
       draw();
-
       if (elapsed >= CENTER_HOLD_MS){
         holdActive = false;
         finalizeCenterHold([...holdSamples], false);
@@ -943,7 +731,6 @@
   function finalizeCenterHold(collected, forced){
     if (holdWatchdogId) { clearTimeout(holdWatchdogId); holdWatchdogId = null; }
 
-    finalizeHeadNeutral();
     centerAttempts++;
 
     const xs = collected.map(s=>s.x);
@@ -961,7 +748,8 @@
       avgX == null || avgY == null
     );
 
-    const { innerRect } = getZoneRects();
+    // תמיד נגדיר offset Best-Effort
+    const { innerRect } = getTaskRects();
     const targetCx = (innerRect.left + innerRect.right) / 2;
     const targetCy = (innerRect.top  + innerRect.bottom) / 2;
 
@@ -998,21 +786,7 @@
       return;
     }
 
-    overlayTitle.textContent = "ממשיכים הלאה";
-    overlayText.textContent = "המעקב לא יציב מספיק, אבל נמשיך כדי לא לעכב את המשימה.";
-    overlayContinue.textContent = "המשך";
-    overlay.style.display = "grid";
-    const autoGo2 = setTimeout(() => {
-      if (overlay.style.display === "grid"){
-        overlay.style.display = "none";
-        startXCheck();
-      }
-    }, 1200);
-    overlayContinue.onclick = () => {
-      clearTimeout(autoGo2);
-      overlay.style.display = "none";
-      startXCheck();
-    };
+    startXCheck();
   }
 
   // ======================= XCheck =======================
@@ -1021,25 +795,21 @@
     xCheckPhase = "right";
     xCheckStart = performance.now();
     xCheckSamplesRight = [];
-    xCheckSamplesLeft  = [];
+    xCheckSamplesLeft = [];
     resetSmoothing();
-    draw();
 
     const loop = () => {
       if (!xCheckActive) return;
-
-      const nowT = performance.now();
-      const elapsed = nowT - xCheckStart;
-      const total = (xCheckPhase === "right") ? XCHECK_RIGHT_MS : XCHECK_LEFT_MS;
-
       draw();
+
+      const now = performance.now();
+      const elapsed = now - xCheckStart;
+      const total = (xCheckPhase === "right") ? XCHECK_RIGHT_MS : XCHECK_LEFT_MS;
 
       if (elapsed >= total){
         if (xCheckPhase === "right"){
           xCheckPhase = "left";
           xCheckStart = performance.now();
-          requestAnimationFrame(loop);
-          return;
         } else {
           xCheckActive = false;
           finalizeXCheck();
@@ -1052,62 +822,25 @@
   }
 
   function finalizeXCheck(){
-    if (xCheckSamplesRight.length < XCHECK_MIN_SAMPLES || xCheckSamplesLeft.length < XCHECK_MIN_SAMPLES){
-      finishCalibration();
-      return;
-    }
-    const rx = meanOf(xCheckSamplesRight.map(s=>s.x));
-    const lx = meanOf(xCheckSamplesLeft.map(s=>s.x));
-    if (rx == null || lx == null || Math.abs(rx - lx) < XCHECK_MIN_DELTA_PX){
-      finishCalibration();
-      return;
-    }
-    if (rx < lx){
+    const mr = meanOf(xCheckSamplesRight.map(s=>s.x));
+    const ml = meanOf(xCheckSamplesLeft.map(s=>s.x));
+
+    // אם נראה שהכיוונים הפוכים בעיניים – הופכים FLIP_X (לא חובה תמיד)
+    if (mr != null && ml != null && mr < ml){
       FLIP_X = !FLIP_X;
       resetSmoothing();
     }
-    finishCalibration();
-  }
 
-  function finishCalibration(){
     isCalibrated = true;
     startBtn.disabled = false;
-
-    overlayTitle.textContent = "המערכת מכויילת";
-    overlayText.textContent =
-      "הכיול הושלם. לחץ על \"התחל משימה\" כדי להתחיל.\n\n" +
-      "הערה: כיוון הראש מכויל ביחס ל-5 שניות המרכז (נייטרל).";
-    overlayContinue.textContent = "סגור";
-    overlay.style.display = "grid";
-    overlayContinue.onclick = () => overlay.style.display = "none";
-
-    draw();
+    miniStatus("סטטוס: מוכן להתחלה (עיניים + ראש)");
   }
 
-  // ======================= OFF logic: HEAD primary, gaze fallback =======================
-  function countOffEvent(dir){
-    gazeStats.offEvents++;
-    if (dir === "L") gazeStats.offLeftEvents++;
-    else if (dir === "R") gazeStats.offRightEvents++;
-    else if (dir === "U") gazeStats.offUpEvents++;
-    else if (dir === "D") gazeStats.offDownEvents++;
-    else gazeStats.offUnknownEvents++;
-  }
-
-  function countHeadEvent(dir){
-    gazeStats.headAwayEvents++;
-    if (dir === "L") gazeStats.headLeftEvents++;
-    else if (dir === "R") gazeStats.headRightEvents++;
-    else if (dir === "U") gazeStats.headUpEvents++;
-    else if (dir === "D") gazeStats.headDownEvents++;
-    else gazeStats.headUnknownEvents++;
-  }
-
-  // ======================= WebGazer listener (HEAD OFF + still logs gaze) =======================
+  // ======================= WebGazer gaze listener =======================
   function handleGaze(data, elapsedTime){
-    if (sessionEnded) return;
+    if (!data) return;
 
-    const hadRaw = !!data;
+    const hadRaw = (data.x != null && data.y != null);
     const rawX = hadRaw ? data.x : null;
     const rawY = hadRaw ? data.y : null;
 
@@ -1131,38 +864,25 @@
       return;
     }
 
+    // on_screen לפי עיניים (בתוך הקנבס) + head direction
+    const { canvasRect } = getTaskRects();
+    const gazeValid = !!hadRaw && fixed.rawX != null && fixed.rawY != null;
+    const gazeOnCanvas = gazeValid && isInsideRect(fixed.rawX, fixed.rawY, canvasRect);
+
+    const headDir = head.dir || "C";
+    const onFlag = (gazeOnCanvas && headDir === "C") ? 1 : 0;
     const t = elapsedTime;
 
-    // 1) compute headDir (if available)
-    let facePresent = (head.ready && head.face) ? 1 : 0;
-    let headDir = "CENTER";
-    let headYawRel = "";
-    let headPitchRel = "";
-
-    let headOk = (head.ready && head.calibrated && head.face);
-    if (headOk){
-      const rel = getHeadRel();
-      headYawRel = rel.yawRel.toFixed(4);
-      headPitchRel = rel.pitRel.toFixed(4);
-      headDir = classifyHeadDir(rel.yawRel, rel.pitRel); // "CENTER" or "R/L/U/D"
-    }
-
-    // 2) compute gaze zone + on_screen for general metrics
-    const zoneNow = classifyZone(hadRaw, fixed.x, fixed.y);
-    const onFlag = (zoneNow === "T") ? 1 : 0;
-
-    // 3) time accumulation
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted=true;
       gazeStats.lastTime=t;
-      gazeStats.lastOnFlag=onFlag;
       gazeStats.totalSamples=1;
       if (hadRaw) gazeStats.validSamples=1; else gazeStats.invalidSamples=1;
     } else {
       const dt = t - (gazeStats.lastTime || t);
       gazeStats.lastTime = t;
 
-      if (gazeStats.lastOnFlag === 1){
+      if (onFlag === 1){
         gazeStats.totalOnMs += dt;
         gazeStats.timeTaskMs += dt;
       } else {
@@ -1173,112 +893,57 @@
       gazeStats.totalSamples++;
       if (hadRaw) gazeStats.validSamples++;
       else gazeStats.invalidSamples++;
-
-      gazeStats.lastOnFlag = onFlag;
     }
 
-    // 4) OFF detection:
-    //    - Primary: headDir != CENTER sustained > OFF_MIN_MS
-    //    - Fallback: gaze zone != T sustained > OFF_MIN_MS (uses zone direction)
-    let offDir = "";
-    let offSource = "";
+    // OFF לפי זמן: אם headDir != C או שאין gaze תקין/על קנבס
+    const offNow = (onFlag === 0);
 
-    const wantHeadOff = headOk && (headDir !== "CENTER");
-
-    if (wantHeadOff){
-      // HEAD primary
-      if (!offState.inOff){
-        if (offState.candidateStart == null || offState.lastDir !== headDir){
-          offState.candidateStart = t;
-          offState.lastDir = headDir;
-        }
-        if ((t - offState.candidateStart) >= OFF_MIN_MS){
-          offState.inOff = true;
-          offState.dir = headDir;
-          offState.source = "head";
-          countOffEvent(headDir);
-          countHeadEvent(headDir);
-        }
-      } else {
-        // already OFF; keep direction from current headDir
-        offState.dir = headDir;
-        offState.source = "head";
-      }
+    if (!offNow){
+      offState.candidate=false; offState.candidateStart=null;
+      offState.inOff=false; offState.dir="";
     } else {
-      // reset head candidate if head back to center or not available
-      if (offState.source === "head" && offState.inOff){
-        // stay OFF until gaze returns on-screen OR head returns? -> we'll end OFF when onFlag==1 AND headDir==CENTER (or head not ok)
-        if (onFlag === 1 && (!headOk || headDir === "CENTER")){
-          offState.inOff = false;
-          offState.candidateStart = null;
-          offState.dir = "";
-          offState.source = "";
-          offState.lastDir = "CENTER";
-        }
-      } else {
-        // gaze fallback OFF
-        const gazeAway = (onFlag === 0 && (zoneNow === "L" || zoneNow === "R" || zoneNow === "U" || zoneNow === "D"));
-        if (gazeAway){
-          if (!offState.inOff){
-            if (offState.candidateStart == null || offState.lastDir !== zoneNow){
-              offState.candidateStart = t;
-              offState.lastDir = zoneNow;
-            }
-            if ((t - offState.candidateStart) >= OFF_MIN_MS){
-              offState.inOff = true;
-              offState.dir = zoneNow;
-              offState.source = "gaze";
-              countOffEvent(zoneNow);
-            }
-          } else {
-            offState.dir = zoneNow;
-            offState.source = "gaze";
-          }
-        } else {
-          // back on task or unknown -> end off
-          if (offState.inOff){
-            if (onFlag === 1){
-              offState.inOff = false;
-              offState.candidateStart = null;
-              offState.dir = "";
-              offState.source = "";
-              offState.lastDir = "CENTER";
-            }
-          } else {
-            offState.candidateStart = null;
-            offState.lastDir = "CENTER";
-          }
-        }
+      if (!offState.candidate){
+        offState.candidate = true;
+        offState.candidateStart = t;
+        offState.inOff = false;
       }
-    }
+      let dirNow = "";
+      if (head.ok && headDir !== "C") dirNow = headDir;
+      offState.dir = dirNow;
 
-    if (offState.inOff){
-      offDir = offState.dir || "";
-      offSource = offState.source || "";
+      if (!offState.inOff && offState.candidateStart != null && (t - offState.candidateStart) >= OFF_MIN_MS){
+        offState.inOff = true;
+        gazeStats.offEvents++;
+        if (offState.dir==="L") gazeStats.offLeftEvents++;
+        else if (offState.dir==="R") gazeStats.offRightEvents++;
+        else if (offState.dir==="U") gazeStats.offUpEvents++;
+        else if (offState.dir==="D") gazeStats.offDownEvents++;
+      }
     }
 
     const ms = Math.round(t);
     const taskIndex = currentTask ? currentTask.index : 0;
 
     let xOut="", yOut="";
-    if (hadRaw && fixed.x != null && fixed.y != null){
-      xOut = Math.round(fixed.x);
-      yOut = Math.round(fixed.y);
+    if (hadRaw && fixed.rawX != null && fixed.rawY != null){
+      xOut = Math.round(fixed.rawX);
+      yOut = Math.round(fixed.rawY);
     }
+
+    let dirSample = "";
+    if (onFlag===0 && offState.dir) dirSample = offState.dir;
 
     gazeTimeline.push({
       ms,
       task: taskIndex,
-      zone: zoneNow,
       x: xOut,
       y: yOut,
+      v: gazeValid?1:0,
       on: onFlag,
-      offdir: offDir,
-      offsrc: offSource,
-      face: facePresent,
-      hdir: headDir,
-      hyaw: headYawRel,
-      hpit: headPitchRel
+      dir: dirSample,
+      hy: +(head.yaw||0).toFixed(4),
+      hp: +(head.pitch||0).toFixed(4),
+      hok: head.ok?1:0
     });
   }
 
@@ -1302,444 +967,218 @@
         .showFaceOverlay(false)
         .showPredictionPoints(false)
         .begin();
+
+      // Head tracking רץ על הוידאו של WebGazer (ללא מצלמה נוספת)
+      setTimeout(initHeadTracking, 500);
     } catch(e){
       alert("לא ניתן להפעיל את מעקב העיניים. ניתן להמשיך במשימה ללא המערכת.");
       startBtn.disabled = false;
       return;
     }
 
-    // ===== FIX #1 continued: delay + strict picking of WG video =====
-    setTimeout(() => {
-      const v = getWebgazerVideoElementStrict();
-      if (v){
-        console.log("WG video OK:", v, "readyState:", v.readyState, "srcObject:", !!v.srcObject);
-      } else {
-        console.log("WG video NOT found (strict).");
-      }
-      initFaceMeshUsingWebgazerVideo();
-    }, 800);
-
     setTimeout(startCalibrationSequence, 900);
   }
 
-  function generateCalibrationPoints(count){
-    const rect = canvas.getBoundingClientRect();
-    const m = 30;
-    const W = Math.max(rect.width - 2*m, 220);
-    const H = Math.max(rect.height - 2*m, 220);
-    const pattern = [
-      [0.10,0.10],[0.50,0.10],[0.90,0.10],
-      [0.10,0.50],[0.50,0.50],[0.90,0.50],
-      [0.10,0.90],[0.50,0.90],[0.90,0.90],
-      [0.05,0.20],[0.95,0.20],[0.05,0.80],[0.95,0.80],
-      [0.20,0.05],[0.80,0.05],[0.20,0.95],[0.80,0.95]
-    ];
-    const needed = Math.min(count, pattern.length);
+  function generateCalibrationPoints(){
+    const w = canvas.clientWidth;
+    const h = canvas.clientHeight;
+    const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
+    const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
+
+    const cols = 5;
+    const rows = 4;
     const pts = [];
-    for (let i=0; i<needed; i++){
-      const [nx,ny] = pattern[i];
-      pts.push({ x: m + nx*W, y: m + ny*H });
+    for (let r=0;r<rows;r++){
+      for (let c=0;c<cols;c++){
+        if (pts.length >= CALIB_POINTS_TOTAL-1) break;
+        const x = frameMarginX + (c/(cols-1))*(w-2*frameMarginX);
+        const y = frameMarginY + (r/(rows-1))*(h-2*frameMarginY);
+        pts.push({x,y});
+      }
     }
-    return pts;
+    pts.push({x: w/2, y: h/2});
+    return pts.slice(0, CALIB_POINTS_TOTAL);
   }
 
   function startCalibrationSequence(){
-    calibrationPoints = generateCalibrationPoints(CALIB_POINTS_TOTAL);
+    calibrationPoints = generateCalibrationPoints();
     calibrationIndex = 0;
     calibrationActive = true;
+    miniStatus("סטטוס: כיול עיניים (לחץ על הנקודות)");
     draw();
   }
 
-  function handleCalibrationClick(ev){
-    if (!calibrationActive || !calibrationPoints.length) return;
+  canvas.addEventListener("click", (ev) => {
+    if (!calibrationActive) return;
     const rect = canvas.getBoundingClientRect();
-    const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-    const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
 
-    const current = calibrationPoints[calibrationIndex];
-    if (!current) return;
-    const d = Math.hypot(current.x - x, current.y - y);
+    const p = calibrationPoints[calibrationIndex];
+    const d = Math.hypot(x - p.x, y - p.y);
     if (d > 40) return;
 
-    try{
-      if (window.webgazer && webgazer.recordScreenPosition){
-        const vx = rect.left + current.x;
-        const vy = rect.top  + current.y;
-        webgazer.recordScreenPosition(vx, vy, "click");
-      }
-    } catch(e){}
+    try{ webgazer.recordScreenPosition(ev.clientX, ev.clientY, "click"); }catch(e){}
 
     calibrationIndex++;
     if (calibrationIndex >= calibrationPoints.length){
       calibrationActive = false;
-      centerAttempts = 0;
-
-      overlayTitle.textContent = "שלב אחרון בכיול";
-      overlayText.textContent =
-        "כעת נא להתמיד במבט על הנקודה במרכז למשך 5 שניות (בלי להזיז ראש).\n" +
-        "במקביל: כיוון הראש יכויל (נייטרל).\n" +
-        "לאחר מכן: נקודה בצד ימין 4 שניות ואז בצד שמאל 4 שניות.";
-      overlayContinue.textContent = "התחל";
-      overlay.style.display = "grid";
-      overlayContinue.onclick = () => {
-        overlay.style.display = "none";
-        startCenterHold();
-      };
-
-    } else {
-      draw();
+      miniStatus("סטטוס: כיול מרכז (החזק מבט)");
+      startCenterHold();
+      return;
     }
-  }
+    draw();
+  });
 
-  function showCalibrationIntro(){
-    overlayTitle.textContent = "כיול מצלמה ומערכת מעקב עיניים + כיוון ראש";
-    overlayText.textContent =
-      "יש לאשר פתיחת מצלמה.\n" +
-      "לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.\n\n" +
-      "בסיום: נקודה במרכז ל־5 שניות (כיול נייטרל ראש) ואז נקודה בצד ימין 4 שניות ואז בצד שמאל 4 שניות.\n\n" +
-      "OFF (יותר מ-1 שניה) נספר בעיקר לפי כיוון הראש: R/L/U/D.";
-    overlayContinue.textContent = "פתח מצלמה וכייל";
-    overlay.style.display = "grid";
-    overlayContinue.onclick = () => {
-      overlay.style.display = "none";
-      startWebgazerAndCalibration();
-    };
-  }
-
-  // ======================= Canvas / sizing =======================
+  // ======================= Task logic (connect-the-dots) =======================
   function resizeCanvas(){
     const rect = canvas.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = rect.width * dpr;
-    canvas.height = rect.height * dpr;
-    ctx.setTransform(dpr,0,0,dpr,0,0);
-    draw();
-  }
-  window.addEventListener("resize", resizeCanvas);
-
-  // ======================= משימה (חיבור נקודות) =======================
-  function now(){ return performance.now(); }
-  function randomBetween(min,max){ return min + Math.random() * (max - min); }
-
-  function pointToSegmentDistance(p,a,b){
-    const vx=b.x-a.x, vy=b.y-a.y;
-    const wx=p.x-a.x, wy=p.y-a.y;
-    const c1=vx*wx+vy*wy;
-    if(c1<=0) return Math.hypot(p.x-a.x,p.y-a.y);
-    const c2=vx*vx+vy*vy;
-    if(c2<=c1) return Math.hypot(p.x-b.x,p.y-b.y);
-    const tt=c1/c2;
-    const projX=a.x+tt*vx, projY=a.y+tt*vy;
-    return Math.hypot(p.x-projX,p.y-projY);
+    canvas.width = Math.floor(rect.width * devicePixelRatio);
+    canvas.height = Math.floor(rect.height * devicePixelRatio);
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
   }
 
-  function generatePoints(n){
+  function createTask(nPoints){
     const w = canvas.clientWidth;
     const h = canvas.clientHeight;
 
     const frameMarginX = Math.max(w * FRAME_MARGIN_X_RATIO, 40);
     const frameMarginY = Math.max(h * FRAME_MARGIN_Y_RATIO, 40);
 
-    const left = frameMarginX + POINT_INNER_PADDING;
-    const top  = frameMarginY + POINT_INNER_PADDING;
-    const W = w - 2 * (frameMarginX + POINT_INNER_PADDING);
-    const H = h - 2 * (frameMarginY + POINT_INNER_PADDING);
+    const innerLeft = frameMarginX + POINT_INNER_PADDING;
+    const innerTop  = frameMarginY + POINT_INNER_PADDING;
+    const innerW = (w - 2*frameMarginX) - 2*POINT_INNER_PADDING;
+    const innerH = (h - 2*frameMarginY) - 2*POINT_INNER_PADDING;
 
-    const pts = [];
-    let attempts = 0;
-    const maxAttempts = 4000;
+    const points = [];
+    const tryPlace = () => ({
+      x: innerLeft + Math.random()*innerW,
+      y: innerTop  + Math.random()*innerH
+    });
 
-    while (pts.length < n && attempts < maxAttempts){
-      attempts++;
-      const candidate = { x: randomBetween(left, left + W), y: randomBetween(top, top + H) };
-
+    let guard = 0;
+    while(points.length < nPoints && guard < 10000){
+      guard++;
+      const p = tryPlace();
       let ok = true;
-      for (const p of pts){
-        if (Math.hypot(p.x-candidate.x, p.y-candidate.y) < CONFIG.minDistance){ ok = false; break; }
+      for (const q of points){
+        if (Math.hypot(p.x-q.x, p.y-q.y) < CONFIG.minDistance){
+          ok = false; break;
+        }
       }
-      if (!ok) continue;
-
-      for (let i = 1; i < pts.length; i++){
-        const d = pointToSegmentDistance(candidate, pts[i-1], pts[i]);
-        if (d < CONFIG.lineAvoidDistance){ ok = false; break; }
-      }
-      if (!ok) continue;
-
-      pts.push(candidate);
+      if (ok) points.push(p);
     }
 
-    while (pts.length < n){
-      pts.push({ x: randomBetween(left, left + W), y: randomBetween(top, top + H) });
-    }
-    return pts;
-  }
-
-  function openNewTask(n){
-    pendingNextTaskPoints = null;
-    const pts = generatePoints(n);
-
-    currentTask = {
-      index: ++taskCounter,
-      points: pts,
+    return {
+      index: taskCounter,
+      nPoints,
+      points,
       selected: new Set(),
       selectionOrder: [],
-      errors: 0,
-      startTime: now()
-    };
-
-    try {
-      const rect = canvas.getBoundingClientRect();
-      const layoutRows = pts.map((p, idx) => ({
-        task_index: currentTask.index,
-        point_index: idx + 1,
-        number: idx + 1,
-        x_screen: rect.left + p.x,
-        y_screen: rect.top  + p.y
-      }));
-      taskLayouts.push(...layoutRows);
-    } catch (e) {}
-
-    draw();
-  }
-
-  function hitTest(x,y){
-    if (!currentTask) return -1;
-    const pts = currentTask.points;
-    for(let i=0;i<pts.length;i++){
-      const p = pts[i];
-      if (Math.hypot(p.x-x,p.y-y) <= 18) return i;
-    }
-    return -1;
-  }
-
-  function isPerfectSequence(task){
-    const order = task.selectionOrder;
-    const n = task.points.length;
-    if (order.length !== n) return false;
-    for (let i=0; i<n; i++){
-      if (order[i] !== i) return false;
-    }
-    return true;
-  }
-
-  function resetAttempt(task){
-    task.selected.clear();
-    task.selectionOrder = [];
-    draw();
-  }
-
-  function handlePointerDown(ev){
-    if (calibrationActive){
-      handleCalibrationClick(ev);
-      return;
-    }
-    if (holdActive || xCheckActive) return;
-    if (!running || !currentTask || pendingNextTaskPoints !== null) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
-    const clientY = ev.touches ? ev.touches[0].clientY : ev.clientY;
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
-
-    const idx = hitTest(x,y);
-    if (idx === -1) return;
-
-    const task = currentTask;
-    const selected = task.selected;
-
-    if (selected.has(idx)){
-      selected.delete(idx);
-      task.selectionOrder = task.selectionOrder.filter(i => i !== idx);
-      draw();
-      return;
-    }
-
-    selected.add(idx);
-    task.selectionOrder.push(idx);
-    draw();
-
-    if (task.selectionOrder.length === task.points.length){
-      if (isPerfectSequence(task)){
-        completeCurrentTask();
-      } else {
-        task.errors += 1;
-        resetAttempt(task);
-      }
-    }
-  }
-
-  canvas.addEventListener("pointerdown", handlePointerDown);
-  canvas.addEventListener("touchstart", handlePointerDown, {passive:true});
-
-  // ======================= לוג משימות + סיום =======================
-  function sendTaskToLogForm(row){
-    const params = new URLSearchParams();
-    params.set(LOG_ENTRY_PID,       row.pid);
-    params.set(LOG_ENTRY_TASK,      String(row.task));
-    params.set(LOG_ENTRY_N_POINTS,  String(row.n_points));
-    params.set(LOG_ENTRY_ERRORS,    String(row.errors));
-    params.set(LOG_ENTRY_DURATION,  String(row.duration_ms));
-    params.set(LOG_ENTRY_COMPLETED, String(row.completed));
-    params.set(LOG_ENTRY_TIMESTAMP, row.ts);
-    const url = LOG_FORM_BASE + params.toString();
-    if (navigator.sendBeacon) navigator.sendBeacon(url);
-    else fetch(url, { method:"GET", mode:"no-cors" }).catch(()=>{});
-  }
-
-  function logTask(completed){
-    if (!currentTask) return;
-    const dur = Math.round(now() - currentTask.startTime);
-    const pid = (pidInput.value || "").trim();
-    const row = {
-      pid,
-      task: currentTask.index,
-      n_points: currentTask.points.length,
-      errors: currentTask.errors,
-      duration_ms: dur,
-      completed: completed ? 1 : 0,
-      ts: new Date().toISOString()
-    };
-    tasks.push(row);
-    sendTaskToLogForm(row);
-  }
-
-  function completeCurrentTask(){
-    logTask(true);
-    const nextN = currentTask.points.length + CONFIG.incrementBy;
-    pendingNextTaskPoints = nextN;
-    currentTask = null;
-    draw();
-
-    overlayTitle.textContent = "סיימת משימה";
-    overlayText.textContent = "לחץ/י על \"משימה הבאה\" כדי להמשיך.";
-    overlayContinue.textContent = "משימה הבאה";
-    overlay.style.display = "grid";
-
-    overlayContinue.onclick = () => {
-      overlay.style.display = "none";
-      if (running && pendingNextTaskPoints !== null){
-        openNewTask(pendingNextTaskPoints);
-      }
-    };
-  }
-
-  function buildCsv(){
-    if (!tasks.length) return "";
-    const head = ["pid","task","n_points","errors","duration_ms","completed","ts"];
-    const rows = tasks.map(t =>
-      [t.pid, t.task, t.n_points, t.errors, t.duration_ms, t.completed, t.ts].join(",")
-    );
-    return head.join(",") + "\n" + rows.join("\n");
-  }
-
-  function buildFormSummary(){
-    const completedTasks = tasks.filter(t => t.completed === 1);
-    const totalTasksCompleted = completedTasks.length;
-    let pointsPerTask = "", errorsPerTask = "", durPerTask = "";
-    if (completedTasks.length > 0){
-      pointsPerTask = completedTasks.map(t => t.n_points).join(",");
-      errorsPerTask = completedTasks.map(t => t.errors).join(",");
-      durPerTask = completedTasks.map(t => t.duration_ms).join(",");
-    }
-    return {
-      totalTasksCompleted,
-      pointsPerTask,
-      errorsPerTask,
-      durPerTask,
-      experimentTime: experimentStartIso || ""
-    };
-  }
-
-  function redirectToForm(){
-    const pid = (pidInput.value || "").trim();
-    const s = buildFormSummary();
-    const params = new URLSearchParams();
-    params.set(ENTRY_PID, pid || "");
-    params.set(ENTRY_TOTAL_TASKS, String(s.totalTasksCompleted));
-    params.set(ENTRY_POINTS_PER_TASK, s.pointsPerTask);
-    params.set(ENTRY_ERRORS_PER_TASK, s.errorsPerTask);
-    params.set(ENTRY_DUR_PER_TASK, s.durPerTask);
-    params.set(ENTRY_EXPERIMENT_TIME, s.experimentTime);
-    const target = FORM_BASE_URL + params.toString();
-    window.location.href = target;
-  }
-
-  function tick(){
-    if (!running) return;
-    const elapsedSec = (now() - sessionStart) / 1000;
-    if (elapsedSec >= CONFIG.sessionMinutes * 60){
-      endSession(true);
-    }
-  }
-
-  function endSession(autoEnded){
-    if (sessionEnded){
-      redirectToForm();
-      return;
-    }
-    sessionEnded = true;
-    running = false;
-    if (tickId) clearInterval(tickId);
-    startBtn.disabled = false;
-    endBtn.disabled = true;
-
-    if (currentTask) logTask(false);
-
-    const csv = buildCsv();
-    if (csv) sendCsvToDrive(csv, "connect_the_dots_tasks");
-
-    const eyeCsv = buildEyeCsv();
-    if (eyeCsv) sendCsvToDrive(eyeCsv, "gaze_head_summary");
-
-    const eyeTimelineCsv = buildEyeTimelineCsv();
-    if (eyeTimelineCsv) sendCsvToDrive(eyeTimelineCsv, "gaze_head_timeline");
-
-    const layoutCsv = buildPointsLayoutCsv();
-    if (layoutCsv) sendCsvToDrive(layoutCsv, "points_layout");
-
-    if (window.webgazer){
-      try { webgazer.end(); } catch(e){}
-    }
-    headLoopOn = false;
-
-    overlayTitle.textContent = autoEnded ? "המשימה הסתיימה" : "המשימה הופסקה";
-    overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
-    overlayContinue.textContent = "המשך לשאלון";
-    overlay.style.display = "grid";
-    overlayContinue.onclick = () => {
-      overlay.style.display = "none";
-      redirectToForm();
+      startedAt: performance.now()
     };
   }
 
   function startSession(){
-    const pid = (pidInput.value || "").trim();
-    if (!pid){
-      alert("נא למלא מזהה נבדק לפני תחילת המשימה.");
-      return;
-    }
+    if (running || sessionEnded) return;
     running = true;
-    sessionEnded = false;
-    sessionStart = now();
-    experimentStartIso = new Date().toISOString();
-    tasks = [];
+    sessionStart = performance.now();
     taskCounter = 0;
-    currentTask = null;
-    pendingNextTaskPoints = null;
-
-    overlay.style.display = "none";
+    resetGazeStats();
     startBtn.disabled = true;
     endBtn.disabled = false;
-
-    resetGazeStats();
-    openNewTask(CONFIG.initialPoints);
-
-    if (tickId) clearInterval(tickId);
-    tickId = setInterval(tick, 500);
+    nextTask(CONFIG.initialPoints);
+    tickId = setInterval(tick, 200);
+    miniStatus("סטטוס: רץ");
   }
+
+  function nextTask(nPoints){
+    currentTask = createTask(nPoints);
+    taskCounter++;
+    draw();
+  }
+
+  function endSession(completed){
+    if (sessionEnded) return;
+    sessionEnded = true;
+    running = false;
+    clearInterval(tickId);
+    tickId = null;
+    endBtn.disabled = true;
+
+    try{ if (webgazer && webgazer.end) webgazer.end(); }catch(e){}
+    headLoopRunning = false;
+
+    // כאן אתה יכול לשלוח/להוריד CSV. כרגע: מורידים לקובץ מקומי.
+    const sumCsv = buildEyeCsv();
+    const tlCsv  = buildEyeTimelineCsv();
+
+    downloadText(sumCsv, `${(pidInput.value||"PID")}_summary.csv`);
+    downloadText(tlCsv,  `${(pidInput.value||"PID")}_timeline.csv`);
+
+    overlayTitle.textContent = "הסתיים";
+    overlayText.textContent =
+      completed ? "תודה! המשימה הסתיימה." : "סיום מוקדם. תודה!";
+    overlayContinue.textContent = "סגור";
+    overlay.style.display = "grid";
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+    };
+
+    miniStatus("סטטוס: הסתיים");
+  }
+
+  function tick(){
+    if (!running) return;
+    const now = performance.now();
+    const maxMs = CONFIG.sessionMinutes * 60 * 1000;
+    if ((now - sessionStart) >= maxMs){
+      endSession(true);
+    }
+  }
+
+  function downloadText(text, filename){
+    if (!text) return;
+    const blob = new Blob([text], {type:"text/csv;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  // קליק על נקודות במשימה
+  canvas.addEventListener("pointerdown", (ev) => {
+    if (!running || !currentTask || calibrationActive || holdActive || xCheckActive) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+
+    const pts = currentTask.points;
+    const hit = pts.findIndex(p => Math.hypot(p.x-x, p.y-y) < 16);
+    if (hit < 0) return;
+
+    if (currentTask.selected.has(hit)){
+      currentTask.selected.delete(hit);
+      const idx = currentTask.selectionOrder.indexOf(hit);
+      if (idx >= 0) currentTask.selectionOrder.splice(idx,1);
+    } else {
+      currentTask.selected.add(hit);
+      currentTask.selectionOrder.push(hit);
+    }
+
+    // סיום משימה אם נבחרו כולם
+    if (currentTask.selected.size === currentTask.nPoints){
+      // משימה הבאה / סיום
+      // (כרגע נשאר על אותה כמות נקודות)
+      nextTask(currentTask.nPoints + CONFIG.incrementBy);
+    }
+
+    draw();
+  });
 
   // ======================= Init =======================
   function getPidFromUrl(){
@@ -1753,9 +1192,18 @@
     pidInput.readOnly = true;
   }
 
-  function resizeAndIntro(){
-    resizeCanvas();
-    showCalibrationIntro();
+  function showCalibrationIntro(){
+    overlayTitle.textContent = "התחלה";
+    overlayText.textContent =
+      "נבצע כיול קצר למעקב עיניים.\n" +
+      "לאחר מכן תוכל להתחיל את המשימה.\n\n" +
+      "חשוב: אם ימינה/שמאלה עדיין הפוכים בכיוון הראש — תגיד לי ונחליף סימן.";
+    overlayContinue.textContent = "התחל כיול";
+    overlay.style.display = "grid";
+    overlayContinue.onclick = () => {
+      overlay.style.display = "none";
+      startWebgazerAndCalibration();
+    };
   }
 
   startBtn.addEventListener("click", () => {
@@ -1771,7 +1219,13 @@
   // redraw loop קטן כדי שהנקודה האדומה תזוז תמיד
   setInterval(() => { draw(); }, 33);
 
-  resizeAndIntro();
+  window.addEventListener("resize", () => {
+    resizeCanvas();
+    draw();
+  });
+
+  resizeCanvas();
+  showCalibrationIntro();
 })();
 </script>
 </body>
