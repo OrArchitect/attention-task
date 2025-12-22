@@ -178,14 +178,13 @@
   const FRAME_MARGIN_Y_RATIO = 0.10;
   const POINT_INNER_PADDING = 40;
 
-  // OFF "אמיתי" – סף זמן
-  // (אם micro-glance נספר אצלך עדיין, העלה ל-1000–1200)
+  // OFF "אמיתי" – סף זמן (עכשיו OFF נספר בעיקר לפי HEAD)
   const OFF_MIN_MS = 1000;
 
-  // חלון החלטת כיוון (לפי זמן מצטבר, לא לפי votes)
+  // חלון החלטת כיוון (fallback gaze-only)
   const DIR_WINDOW_MS = 400;
-  const DIR_DOMINANCE_RATIO = 0.45; // כמה מהחלון חייב להיות באותו כיוון כדי לסגור
-  const DIR_DEADZONE_RATIO = 0.10;  // קטן יותר כדי שלא תקבל "O" במקום U/D
+  const DIR_DOMINANCE_RATIO = 0.45;
+  const DIR_DEADZONE_RATIO = 0.10;
 
   // סינון לתצוגת הנקודה האדומה + לסיווג zones
   const SMOOTH_ALPHA = 0.35;
@@ -210,12 +209,10 @@
   const DRAW_GAZE_DOT = true;
 
   // ======================= Head direction (FaceMesh) =======================
-  // ספים לזיהוי "הראש פונה החוצה" – זה מה שיתפוס גם "45 מעלות" חלקי.
-  // (תתחיל מהערכים האלו. אם זה רגיש מדי – תגדיל מעט.)
-  const HEAD_YAW_THRESHOLD   = 0.18; // ימינה/שמאלה
-  const HEAD_PITCH_THRESHOLD = 0.16; // למעלה/למטה (טלפון לרוב = D)
-  const HEAD_AWAY_MIN_MS     = 450;  // כמה זמן רצוף מחוץ לסף כדי לספור אירוע
-  const HEAD_SMOOTH_ALPHA    = 0.25; // החלקה
+  // ספים לזיהוי "הראש פונה החוצה"
+  const HEAD_YAW_THRESHOLD   = 0.18; // R/L
+  const HEAD_PITCH_THRESHOLD = 0.16; // U/D
+  const HEAD_SMOOTH_ALPHA    = 0.25;
 
   // ======================= שליחה ל־Drive =======================
   const SCRIPT_URL =
@@ -273,7 +270,7 @@
   const overlayContinue = document.getElementById("overlayContinue");
   const miniStatus = document.getElementById("miniStatus");
 
-  // FaceMesh video
+  // FaceMesh video (hidden; not used as camera source anymore)
   const fmVideo = document.getElementById("fmVideo");
 
   // ======================= STATE =======================
@@ -394,7 +391,7 @@
     return { x: gazeFix.smoothX, y: gazeFix.smoothY, rawX: rawFixedX, rawY: rawFixedY };
   }
 
-  // ======================= Zones =======================
+  // ======================= Zones (fallback gaze) =======================
   function getZoneRects(){
     const rect = canvas.getBoundingClientRect();
     const marginX = Math.max(rect.width  * FRAME_MARGIN_X_RATIO, 40);
@@ -446,13 +443,7 @@
     pitchSm: 0,
     neutralYaw: 0,
     neutralPitch: 0,
-    calibrated: false,
-
-    // away detection
-    awayStart: null,
-    awayDir: "CENTER",
-    awayEvents: 0,
-    left:0, right:0, up:0, down:0, unknown:0
+    calibrated: false
   };
 
   function lm(landmarks, idx){
@@ -467,7 +458,7 @@
     return prev + a*(next-prev);
   }
 
-  // yaw/pitch proxy based on nose relative to eyes (stable enough for direction)
+  // yaw/pitch proxy
   function computeYawPitch(landmarks){
     const leftEye = lm(landmarks, 33);
     const rightEye = lm(landmarks, 263);
@@ -498,40 +489,39 @@
     }
   }
 
-  function updateHeadAway(t, dir){
-    if (dir === "CENTER"){
-      head.awayStart = null;
-      head.awayDir = "CENTER";
-      return { away:0, dir:"CENTER" };
+  function startHeadNeutralCalibration(){
+    head.neutralYaw = 0;
+    head.neutralPitch = 0;
+    head.calibrated = false;
+    head._calSamples = [];
+  }
+  function sampleHeadNeutral(){
+    if (!head.ready || !head.face) return;
+    head._calSamples.push({yaw: head.yawSm, pitch: head.pitchSm});
+  }
+  function finalizeHeadNeutral(){
+    const s = head._calSamples || [];
+    if (!s.length){
+      head.calibrated = false;
+      return;
     }
-
-    if (head.awayStart == null){
-      head.awayStart = t;
-      head.awayDir = dir;
-      return { away:0, dir };
-    }
-
-    head.awayDir = dir;
-
-    if ((t - head.awayStart) >= HEAD_AWAY_MIN_MS){
-      head.awayEvents++;
-      if (head.awayDir === "L") head.left++;
-      else if (head.awayDir === "R") head.right++;
-      else if (head.awayDir === "U") head.up++;
-      else if (head.awayDir === "D") head.down++;
-      else head.unknown++;
-
-      head.awayStart = null;
-      head.awayDir = "CENTER";
-      return { away:1, dir };
-    }
-    return { away:0, dir };
+    const my = s.reduce((a,p)=>a+p.yaw,0)/s.length;
+    const mp = s.reduce((a,p)=>a+p.pitch,0)/s.length;
+    head.neutralYaw = my;
+    head.neutralPitch = mp;
+    head.calibrated = true;
+  }
+  function getHeadRel(){
+    const yawRel = head.yawSm - head.neutralYaw;
+    const pitRel = head.pitchSm - head.neutralPitch;
+    return { yawRel, pitRel };
   }
 
+  // ======= IMPORTANT FIX: FaceMesh uses WebGazer's VIDEO (no second camera open) =======
   let faceMesh = null;
-  let fmCamera = null;
+  let headLoopOn = false;
 
-  async function initFaceMesh(){
+  async function initFaceMeshUsingWebgazerVideo(){
     if (head.ready) return;
 
     try{
@@ -547,7 +537,6 @@
       });
 
       faceMesh.onResults((results) => {
-        const t = performance.now();
         const faces = results.multiFaceLandmarks || [];
         if (!faces.length){
           head.face = false;
@@ -563,118 +552,93 @@
         head.pitchSm = ema(head.pitchSm, pitch, HEAD_SMOOTH_ALPHA);
       });
 
-      fmCamera = new Camera.Camera(fmVideo, {
-        onFrame: async () => {
-          await faceMesh.send({image: fmVideo});
-        },
-        width: 1280,
-        height: 720
-      });
+      // Find the same video element WebGazer uses
+      const wgVideo =
+        (window.webgazer && webgazer.getVideoElement) ? webgazer.getVideoElement() :
+        document.getElementById("webgazerVideoFeed") ||
+        document.querySelector("video");
 
-      await fmCamera.start();
+      if (!wgVideo){
+        miniStatus.textContent = "סטטוס: Head tracking לא הופעל (לא נמצא video של WebGazer)";
+        return;
+      }
+
+      headLoopOn = true;
+      const loop = async () => {
+        if (!headLoopOn) return;
+        if (wgVideo.readyState >= 2){
+          await faceMesh.send({ image: wgVideo });
+        }
+        requestAnimationFrame(loop);
+      };
+      requestAnimationFrame(loop);
+
       head.ready = true;
       miniStatus.textContent = "סטטוס: מצלמה פעילה (WebGazer + Head)";
     } catch(e){
-      // אם נכשל, נמשיך בלי head (אבל לא נעצור את הניסוי)
       miniStatus.textContent = "סטטוס: Head tracking לא הופעל (ממשיך ללא Head)";
     }
-  }
-
-  function startHeadNeutralCalibration(){
-    // נאסוף בזמן holdActive (5 שניות מרכז)
-    head.neutralYaw = 0;
-    head.neutralPitch = 0;
-    head.calibrated = false;
-    head._calSamples = [];
-  }
-
-  function sampleHeadNeutral(){
-    if (!head.ready || !head.face) return;
-    head._calSamples.push({yaw: head.yawSm, pitch: head.pitchSm});
-  }
-
-  function finalizeHeadNeutral(){
-    const s = head._calSamples || [];
-    if (!s.length){
-      head.calibrated = false;
-      return;
-    }
-    const my = s.reduce((a,p)=>a+p.yaw,0)/s.length;
-    const mp = s.reduce((a,p)=>a+p.pitch,0)/s.length;
-    head.neutralYaw = my;
-    head.neutralPitch = mp;
-    head.calibrated = true;
-  }
-
-  function getHeadRel(){
-    const yawRel = head.yawSm - head.neutralYaw;
-    const pitRel = head.pitchSm - head.neutralPitch;
-    return { yawRel, pitRel };
   }
 
   // ======================= Stats / timeline =======================
   const gazeStats = {
     hasStarted: false,
     lastTime: null,
-    lastZone: "O",
+    lastOnFlag: 0,
     totalOnMs: 0,
     totalOffMs: 0,
     totalSamples: 0,
     validSamples: 0,
     invalidSamples: 0,
+
+    // OFF by HEAD (primary)
     offEvents: 0,
-    offUnknownEvents: 0,
     offLeftEvents: 0,
     offRightEvents: 0,
     offUpEvents: 0,
     offDownEvents: 0,
+    offUnknownEvents: 0,
+
+    // Head-only summary
+    headAwayEvents: 0,
+    headLeftEvents: 0,
+    headRightEvents: 0,
+    headUpEvents: 0,
+    headDownEvents: 0,
+    headUnknownEvents: 0,
+
     timeTaskMs: 0,
     timeDeviationMs: 0
   };
 
-  // off state now uses time-weighted direction accumulation
+  // OFF state (HEAD primary)
   const offState = {
-    candidate: false,
-    candidateStart: null,
     inOff: false,
+    candidateStart: null,
     dir: "",
-    dirMs: { L:0, R:0, U:0, D:0 },
-    winStart: null,
-    lastT: null
+    source: "", // "head" | "gaze"
+    lastDir: "CENTER"
   };
 
   const gazeTimeline = [];
 
   function resetGazeStats(){
     Object.assign(gazeStats,{
-      hasStarted:false,lastTime:null,lastZone:"O",
+      hasStarted:false,lastTime:null,lastOnFlag:0,
       totalOnMs:0,totalOffMs:0,totalSamples:0,validSamples:0,invalidSamples:0,
-      offEvents:0,offUnknownEvents:0,offLeftEvents:0,offRightEvents:0,offUpEvents:0,offDownEvents:0,
+      offEvents:0,offLeftEvents:0,offRightEvents:0,offUpEvents:0,offDownEvents:0,offUnknownEvents:0,
+      headAwayEvents:0,headLeftEvents:0,headRightEvents:0,headUpEvents:0,headDownEvents:0,headUnknownEvents:0,
       timeTaskMs:0,timeDeviationMs:0
     });
-    offState.candidate=false; offState.candidateStart=null;
-    offState.inOff=false; offState.dir="";
-    offState.dirMs={L:0,R:0,U:0,D:0};
-    offState.winStart=null;
-    offState.lastT=null;
+
+    offState.inOff=false;
+    offState.candidateStart=null;
+    offState.dir="";
+    offState.source="";
+    offState.lastDir="CENTER";
 
     gazeTimeline.length=0;
     resetSmoothing();
-
-    // reset head counters per session
-    head.awayStart=null; head.awayDir="CENTER";
-    head.awayEvents=0; head.left=0; head.right=0; head.up=0; head.down=0; head.unknown=0;
-  }
-
-  function meanOf(arr){
-    if (!arr.length) return null;
-    return arr.reduce((a,v)=>a+v,0)/arr.length;
-  }
-  function stdOf(arr){
-    if (arr.length < 2) return 9999;
-    const m = arr.reduce((a,v)=>a+v,0)/arr.length;
-    const v = arr.reduce((a,vv)=>a+(vv-m)*(vv-m),0)/(arr.length-1);
-    return Math.sqrt(v);
   }
 
   function buildEyeCsv(){
@@ -701,7 +665,7 @@
       gazeStats.offDownEvents,
       Math.round(gazeStats.timeTaskMs),
       Math.round(gazeStats.timeDeviationMs),
-      head.awayEvents, head.left, head.right, head.up, head.down, head.unknown
+      gazeStats.headAwayEvents, gazeStats.headLeftEvents, gazeStats.headRightEvents, gazeStats.headUpEvents, gazeStats.headDownEvents, gazeStats.headUnknownEvents
     ].join(",");
     return headRow.join(",") + "\n" + row + "\n";
   }
@@ -711,14 +675,16 @@
     if (!gazeTimeline.length) return "";
     const headCols = [
       "pid","task_index","ms",
-      "zone","x_fixed","y_fixed","on_screen","off_direction",
-      "face_present","head_dir","head_yaw_rel","head_pitch_rel","head_away_event"
+      "zone","x_fixed","y_fixed","on_screen",
+      "off_direction","off_source",
+      "face_present","head_dir","head_yaw_rel","head_pitch_rel"
     ];
     const rows = gazeTimeline.map(s =>
       [
         pid, s.task, s.ms,
-        s.zone || "", s.x, s.y, s.on, s.dir,
-        s.face, s.hdir, s.hyaw, s.hpit, s.haway
+        s.zone || "", s.x, s.y, s.on,
+        s.offdir, s.offsrc,
+        s.face, s.hdir, s.hyaw, s.hpit
       ].join(",")
     );
     return headCols.join(",") + "\n" + rows.join("\n");
@@ -898,6 +864,17 @@
   }
 
   // ======================= כיול מרכז: תמיד נגמר ולא נתקע =======================
+  function meanOf(arr){
+    if (!arr.length) return null;
+    return arr.reduce((a,v)=>a+v,0)/arr.length;
+  }
+  function stdOf(arr){
+    if (arr.length < 2) return 9999;
+    const m = arr.reduce((a,v)=>a+v,0)/arr.length;
+    const v = arr.reduce((a,vv)=>a+(vv-m)*(vv-m),0)/(arr.length-1);
+    return Math.sqrt(v);
+  }
+
   function startCenterHold(){
     if (holdWatchdogId) clearTimeout(holdWatchdogId);
 
@@ -923,10 +900,9 @@
       if (!holdActive) return;
       const elapsed = performance.now() - holdStart;
 
-      // דוגמים נייטרל לראש במהלך ההחזקה
       sampleHeadNeutral();
-
       draw();
+
       if (elapsed >= CENTER_HOLD_MS){
         holdActive = false;
         finalizeCenterHold([...holdSamples], false);
@@ -940,9 +916,7 @@
   function finalizeCenterHold(collected, forced){
     if (holdWatchdogId) { clearTimeout(holdWatchdogId); holdWatchdogId = null; }
 
-    // מסיימים כיול נייטרל לראש
     finalizeHeadNeutral();
-
     centerAttempts++;
 
     const xs = collected.map(s=>s.x);
@@ -1083,7 +1057,26 @@
     draw();
   }
 
-  // ======================= WebGazer listener (improved OFF + Head logging) =======================
+  // ======================= OFF logic: HEAD primary, gaze fallback =======================
+  function countOffEvent(dir){
+    gazeStats.offEvents++;
+    if (dir === "L") gazeStats.offLeftEvents++;
+    else if (dir === "R") gazeStats.offRightEvents++;
+    else if (dir === "U") gazeStats.offUpEvents++;
+    else if (dir === "D") gazeStats.offDownEvents++;
+    else gazeStats.offUnknownEvents++;
+  }
+
+  function countHeadEvent(dir){
+    gazeStats.headAwayEvents++;
+    if (dir === "L") gazeStats.headLeftEvents++;
+    else if (dir === "R") gazeStats.headRightEvents++;
+    else if (dir === "U") gazeStats.headUpEvents++;
+    else if (dir === "D") gazeStats.headDownEvents++;
+    else gazeStats.headUnknownEvents++;
+  }
+
+  // ======================= WebGazer listener (HEAD OFF + still logs gaze) =======================
   function handleGaze(data, elapsedTime){
     if (sessionEnded) return;
 
@@ -1094,7 +1087,6 @@
     const mode = (holdActive || xCheckActive) ? "calib" : "run";
     const fixed = hadRaw ? applyFixes(rawX, rawY, mode) : {x:null,y:null,rawX:null,rawY:null};
 
-    // IMPORTANT: use filtered coords for zone classification + logging
     dbg.x = fixed.x;
     dbg.y = fixed.y;
 
@@ -1112,46 +1104,38 @@
       return;
     }
 
-    const zoneNow = classifyZone(hadRaw, fixed.x, fixed.y);
-    const onFlag = (zoneNow === "T") ? 1 : 0;
     const t = elapsedTime;
 
-    // ---- head current state for this sample ----
-    let facePresent = head.face ? 1 : 0;
+    // 1) compute headDir (if available)
+    let facePresent = (head.ready && head.face) ? 1 : 0;
     let headDir = "CENTER";
     let headYawRel = "";
     let headPitchRel = "";
-    let headAwayEvent = 0;
 
-    if (head.ready && head.calibrated && head.face){
+    let headOk = (head.ready && head.calibrated && head.face);
+    if (headOk){
       const rel = getHeadRel();
       headYawRel = rel.yawRel.toFixed(4);
       headPitchRel = rel.pitRel.toFixed(4);
-      headDir = classifyHeadDir(rel.yawRel, rel.pitRel);
-      const awayRes = updateHeadAway(t, headDir);
-      headAwayEvent = awayRes.away;
-    } else {
-      // אם אין פנים/אין כיול: נשאיר ערכים ריקים + CENTER
-      if (head.ready && !head.face){
-        // אפשר לבחור אם "אין פנים" ייחשב כ-UNK away event.
-        // כרגע: לא נספור אירוע, רק נרשום FACE=0.
-      }
+      headDir = classifyHeadDir(rel.yawRel, rel.pitRel); // "CENTER" or "R/L/U/D"
     }
 
-    // ---- gaze base stats ----
+    // 2) compute gaze zone + on_screen for general metrics
+    const zoneNow = classifyZone(hadRaw, fixed.x, fixed.y);
+    const onFlag = (zoneNow === "T") ? 1 : 0;
+
+    // 3) time accumulation
     if (!gazeStats.hasStarted){
       gazeStats.hasStarted=true;
       gazeStats.lastTime=t;
-      gazeStats.lastZone=zoneNow;
+      gazeStats.lastOnFlag=onFlag;
       gazeStats.totalSamples=1;
       if (hadRaw) gazeStats.validSamples=1; else gazeStats.invalidSamples=1;
-
-      offState.lastT = t;
     } else {
       const dt = t - (gazeStats.lastTime || t);
       gazeStats.lastTime = t;
 
-      if (gazeStats.lastZone === "T"){
+      if (gazeStats.lastOnFlag === 1){
         gazeStats.totalOnMs += dt;
         gazeStats.timeTaskMs += dt;
       } else {
@@ -1163,66 +1147,87 @@
       if (hadRaw) gazeStats.validSamples++;
       else gazeStats.invalidSamples++;
 
-      // keep offState dt
-      offState.lastT = t;
+      gazeStats.lastOnFlag = onFlag;
     }
 
-    // ---- improved OFF detection with time-weighted direction ----
-    if (onFlag === 1){
-      if (offState.candidate || offState.inOff || offState.winStart != null){
-        offState.candidate=false; offState.candidateStart=null;
-        offState.inOff=false; offState.dir="";
-        offState.dirMs={L:0,R:0,U:0,D:0};
-        offState.winStart=null;
+    // 4) OFF detection:
+    //    - Primary: headDir != CENTER sustained > OFF_MIN_MS
+    //    - Fallback: gaze zone != T sustained > OFF_MIN_MS (uses zone direction)
+    let offDir = "";
+    let offSource = "";
+
+    const wantHeadOff = headOk && (headDir !== "CENTER");
+
+    if (wantHeadOff){
+      // HEAD primary
+      if (!offState.inOff){
+        if (offState.candidateStart == null || offState.lastDir !== headDir){
+          offState.candidateStart = t;
+          offState.lastDir = headDir;
+        }
+        if ((t - offState.candidateStart) >= OFF_MIN_MS){
+          offState.inOff = true;
+          offState.dir = headDir;
+          offState.source = "head";
+          countOffEvent(headDir);
+          countHeadEvent(headDir);
+        }
+      } else {
+        // already OFF; keep direction from current headDir
+        offState.dir = headDir;
+        offState.source = "head";
       }
     } else {
-      if (gazeStats.lastZone === "T" && !offState.candidate){
-        offState.candidate=true;
-        offState.candidateStart=t;
-        offState.inOff=false;
-        offState.dir="";
-        offState.dirMs={L:0,R:0,U:0,D:0};
-        offState.winStart=t;
+      // reset head candidate if head back to center or not available
+      if (offState.source === "head" && offState.inOff){
+        // stay OFF until gaze returns on-screen OR head returns? -> we'll end OFF when onFlag==1 AND headDir==CENTER (or head not ok)
+        if (onFlag === 1 && (!headOk || headDir === "CENTER")){
+          offState.inOff = false;
+          offState.candidateStart = null;
+          offState.dir = "";
+          offState.source = "";
+          offState.lastDir = "CENTER";
+        }
+      } else {
+        // gaze fallback OFF
+        const gazeAway = (onFlag === 0 && (zoneNow === "L" || zoneNow === "R" || zoneNow === "U" || zoneNow === "D"));
+        if (gazeAway){
+          if (!offState.inOff){
+            if (offState.candidateStart == null || offState.lastDir !== zoneNow){
+              offState.candidateStart = t;
+              offState.lastDir = zoneNow;
+            }
+            if ((t - offState.candidateStart) >= OFF_MIN_MS){
+              offState.inOff = true;
+              offState.dir = zoneNow;
+              offState.source = "gaze";
+              countOffEvent(zoneNow);
+            }
+          } else {
+            offState.dir = zoneNow;
+            offState.source = "gaze";
+          }
+        } else {
+          // back on task or unknown -> end off
+          if (offState.inOff){
+            if (onFlag === 1){
+              offState.inOff = false;
+              offState.candidateStart = null;
+              offState.dir = "";
+              offState.source = "";
+              offState.lastDir = "CENTER";
+            }
+          } else {
+            offState.candidateStart = null;
+            offState.lastDir = "CENTER";
+          }
+        }
       }
+    }
 
-      // accumulate ms per direction based on dt
-      // estimate dt using last gazeStats time step
-      const dt = Math.max(0, t - (offState._prevT ?? t));
-      offState._prevT = t;
-
-      if (zoneNow === "L") offState.dirMs.L += dt;
-      else if (zoneNow === "R") offState.dirMs.R += dt;
-      else if (zoneNow === "U") offState.dirMs.U += dt;
-      else if (zoneNow === "D") offState.dirMs.D += dt;
-
-      if (offState.winStart != null && (t - offState.winStart) >= DIR_WINDOW_MS){
-        const arr = [
-          ["L", offState.dirMs.L],
-          ["R", offState.dirMs.R],
-          ["U", offState.dirMs.U],
-          ["D", offState.dirMs.D],
-        ].sort((a,b)=>b[1]-a[1]);
-
-        const [bestDir, bestMs] = arr[0];
-        if (bestMs >= DIR_WINDOW_MS * DIR_DOMINANCE_RATIO) offState.dir = bestDir;
-
-        offState.dirMs={L:0,R:0,U:0,D:0};
-        offState.winStart=t;
-      }
-
-      if (offState.candidate && !offState.inOff &&
-          offState.candidateStart != null &&
-          (t - offState.candidateStart) >= OFF_MIN_MS){
-        offState.inOff=true;
-
-        // count OFF even if no direction
-        gazeStats.offEvents++;
-        if (!offState.dir) gazeStats.offUnknownEvents++;
-        else if (offState.dir==="L") gazeStats.offLeftEvents++;
-        else if (offState.dir==="R") gazeStats.offRightEvents++;
-        else if (offState.dir==="U") gazeStats.offUpEvents++;
-        else if (offState.dir==="D") gazeStats.offDownEvents++;
-      }
+    if (offState.inOff){
+      offDir = offState.dir || "";
+      offSource = offState.source || "";
     }
 
     const ms = Math.round(t);
@@ -1234,9 +1239,6 @@
       yOut = Math.round(fixed.y);
     }
 
-    let dirSample = "";
-    if (onFlag===0 && offState.dir) dirSample = offState.dir;
-
     gazeTimeline.push({
       ms,
       task: taskIndex,
@@ -1244,15 +1246,13 @@
       x: xOut,
       y: yOut,
       on: onFlag,
-      dir: dirSample,
+      offdir: offDir,
+      offsrc: offSource,
       face: facePresent,
       hdir: headDir,
       hyaw: headYawRel,
-      hpit: headPitchRel,
-      haway: headAwayEvent
+      hpit: headPitchRel
     });
-
-    gazeStats.lastZone = zoneNow;
   }
 
   // ======================= WebGazer + כיול נקודות =======================
@@ -1281,8 +1281,8 @@
       return;
     }
 
-    // Head tracking uses same camera permission; start it too.
-    initFaceMesh();
+    // Head tracking starts AFTER WebGazer begins, and uses the same video element
+    initFaceMeshUsingWebgazerVideo();
 
     setTimeout(startCalibrationSequence, 900);
   }
@@ -1364,7 +1364,7 @@
       "יש לאשר פתיחת מצלמה.\n" +
       "לאחר מכן יופיעו 17 נקודות אדומות – יש להביט בכל נקודה וללחוץ עליה.\n\n" +
       "בסיום: נקודה במרכז ל־5 שניות (כיול נייטרל ראש) ואז נקודה בצד ימין 4 שניות ואז בצד שמאל 4 שניות.\n\n" +
-      "המערכת תרשום גם: gaze על המסך + head direction (ימין/שמאל/מעלה/מטה).";
+      "OFF (יותר מ-1 שניה) נספר בעיקר לפי כיוון הראש: R/L/U/D.";
     overlayContinue.textContent = "פתח מצלמה וכייל";
     overlay.style.display = "grid";
     overlayContinue.onclick = () => {
@@ -1474,7 +1474,7 @@
     const pts = currentTask.points;
     for(let i=0;i<pts.length;i++){
       const p = pts[i];
-      if (Math.hypot(p.x-x, p.y-y) <= 18) return i;
+      if (Math.hypot(p.x-x,p.y-y) <= 18) return i;
     }
     return -1;
   }
@@ -1668,9 +1668,7 @@
     if (window.webgazer){
       try { webgazer.end(); } catch(e){}
     }
-    if (fmCamera){
-      try { fmCamera.stop(); } catch(e){}
-    }
+    headLoopOn = false;
 
     overlayTitle.textContent = autoEnded ? "המשימה הסתיימה" : "המשימה הופסקה";
     overlayText.textContent = "תודה על ביצוע המשימה. כעת נעבור לשאלון קצר נוסף.";
