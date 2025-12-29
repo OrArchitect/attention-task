@@ -219,7 +219,6 @@
     </div>
   </div>
 
-
   <!-- Always-on hidden video (camera feed) -->
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
@@ -247,9 +246,9 @@
   // ---- Drive Upload (Google Apps Script Web App)
   const DRIVE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzzL6_C4miqkMb46vs9qVYRnp1_uzq1ZdrSR7fk-J8s1HBIxwN-ad3OAQrNAAd6PHd2/exec";
 
-  
   const FOLLOWUP_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA/viewform?usp=header";
-// ---- DOM
+
+  // ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
 
@@ -266,7 +265,7 @@
   const followupOverlay = document.getElementById('followupOverlay');
   const followupMsgEl = document.getElementById('followupMsg');
   const btnFollowup = document.getElementById('btnFollowup');
-  const btnFollowupClose = document.getElementById('btnFollowupClose');
+  const btnFollowupClose = document.getElementById('btnFollowupClose'); // (kept harmlessly; element doesn't exist)
 
   const video = document.getElementById('video');
 
@@ -362,10 +361,10 @@
       }))
     };
 
-   const res = await fetch(DRIVE_WEBAPP_URL, {
-  method: "POST",
-  body: JSON.stringify(payload) // בלי headers בכלל => text/plain => אין preflight => אין CORS
-});
+    const res = await fetch(DRIVE_WEBAPP_URL, {
+      method: "POST",
+      body: JSON.stringify(payload) // בלי headers בכלל => text/plain => אין preflight => אין CORS
+    });
 
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok){
@@ -634,25 +633,44 @@
 
     taskOverlay.style.display = 'none';
 
-    // ✅ upload to your Drive (PID folder) + fallback to downloads if needed
-    try{
-      await sendAllCSVsToDrive();
-      stopHeadTracking();
-      followupMessage = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. עכשיו נמשיך לשאלון קצר.';
-    } catch (e){
-      console.error(e);
+    // ✅ Prepare CSV payload now (so we can reset UI immediately),
+    // and send to Drive in the background (non-blocking for participant).
+    const pidSafe = getPidSafe();
+    const ts = isoStamp();
 
-      // fallback: download locally so you never lose data
-      downloadTimelineCSV();
-      downloadOffSummaryCSV();
-      downloadCSVReport();
+    const timelineCsv = buildTimelineCSVString();
+    const offSummaryCsv = buildOffSummaryCSVString();
+    const reportCsv = buildReportCSVString();
 
-      stopHeadTracking();
-      followupMessage = 'תודה רבה! הייתה בעיה בשליחת הקבצים ל-Drive, לכן הקבצים הורדו למחשב. עכשיו נמשיך לשאלון קצר.';
-    }
+    const filesToSend = [
+      { filename: `${pidSafe}_timeline_${ts}.csv`,     mimeType: "text/csv;charset=utf-8", content: timelineCsv },
+      { filename: `${pidSafe}_off_summary_${ts}.csv`,  mimeType: "text/csv;charset=utf-8", content: offSummaryCsv },
+      { filename: `${pidSafe}_report_${ts}.csv`,       mimeType: "text/csv;charset=utf-8", content: reportCsv }
+    ];
 
+    // Stop camera immediately (no need to keep it running while we upload)
+    stopHeadTracking();
+
+    // Show the follow-up overlay immediately (no waiting)
+    followupMessage = 'תודה רבה! אפשר להמשיך לשאלון קצר. הקבצים נשלחים עכשיו ברקע…';
     resetUI();
     showFollowupOverlay(followupMessage);
+
+    // Background upload (do NOT await)
+    uploadFilesToDrive({ pid: pidSafe, files: filesToSend })
+      .then(() => {
+        // Update message (optional, no UI changes)
+        if (followupMsgEl) {
+          followupMsgEl.textContent = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. אפשר להמשיך לשאלון קצר.';
+        }
+      })
+      .catch((e) => {
+        console.error(e);
+        // Don't force downloads (would interrupt participant); just update the message.
+        if (followupMsgEl) {
+          followupMsgEl.textContent = 'תודה רבה! אפשר להמשיך לשאלון קצר. (שימו לב: הייתה בעיה בשליחת הקבצים ל-Drive — אנא עדכנו את החוקר/ת.)';
+        }
+      });
   }
 
   function loop(){
@@ -696,7 +714,6 @@
     draw();
   }
 
-  
   // ---- CSV builders (strings) - so we can either download or upload
   function buildReportCSVString(){
     const header = ['מספר משימה','זמן משימה (שניות)','כמות טעויות במשימה'];
@@ -756,9 +773,6 @@
   }
 
   function buildOffSummaryCSVString(){
-    // Timeline is sampled every TIMELINE_DT_MS.
-    // "Event" = continuous OFFSCREEN run; a direction change within OFF counts as new event.
-
     const byTask = new Map();
 
     function ensureTask(taskNumber){
@@ -779,14 +793,12 @@
       return byTask.get(key);
     }
 
-    // totalTimePerTask from log.tasks if available
     for (const t of (log.tasks || [])){
       const taskKey = String(t.taskIndex ?? "");
       const rec = ensureTask(taskKey);
       if (typeof t.durationMs === "number") rec.totalTimePerTaskMs = t.durationMs;
     }
 
-    // fallback compute max tFromTaskMs if needed
     const maxTaskMs = new Map();
     for (const r of timeline){
       const taskKey = String(r.taskNumber ?? "");
@@ -801,8 +813,7 @@
       }
     }
 
-    // state per task for OFF events
-    const stateByTask = new Map(); // taskKey -> {inOff:boolean, dir:string}
+    const stateByTask = new Map();
 
     for (let i=0;i<timeline.length;i++){
       const r = timeline[i];
@@ -816,7 +827,6 @@
 
       const st = stateByTask.get(taskKey) ?? { inOff:false, dir:"" };
 
-      // accumulate OFF time
       if (onoff === "OFFSCREEN"){
         rec.totalOffMs += TIMELINE_DT_MS;
 
@@ -826,10 +836,8 @@
         else if (dir === "RIGHT") rec.rightTimeMs += TIMELINE_DT_MS;
       }
 
-      // event counting rules
       if (onoff === "OFFSCREEN"){
         if (!st.inOff){
-          // entering OFF
           st.inOff = true;
           st.dir = dir;
 
@@ -839,7 +847,6 @@
           else if (dir === "RIGHT") rec.rightCount += 1;
 
         } else {
-          // already off: direction change triggers new event
           if (dir && dir !== st.dir){
             st.dir = dir;
 
@@ -850,7 +857,6 @@
           }
         }
       } else {
-        // back to ONSCREEN
         st.inOff = false;
         st.dir = "";
       }
@@ -858,7 +864,6 @@
       stateByTask.set(taskKey, st);
     }
 
-    // Header with your requested labels
     const header = [
       "taskNumber",
       "TOTAL TIME PER TASK",
@@ -901,38 +906,10 @@
     };
 
     const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
-    return "\uFEFF" + csv; // BOM for Excel
+    return "\uFEFF" + csv;
   }
 
-  async function sendAllCSVsToDrive(){
-    const pid = getPidSafe();
-    const ts = isoStamp();
-
-    const files = [
-      { filename: `${pid}_timeline_${ts}.csv`, mimeType: "text/csv;charset=utf-8", content: buildTimelineCSVString() },
-      { filename: `${pid}_off_summary_${ts}.csv`, mimeType: "text/csv;charset=utf-8", content: buildOffSummaryCSVString() },
-      { filename: `${pid}_report_${ts}.csv`, mimeType: "text/csv;charset=utf-8", content: buildReportCSVString() }
-    ];
-
-    return await uploadFilesToDrive({ pid, files });
-  }
-// ---- REPORT (per-task CSV)  (PID prefix)
-  function downloadCSVReport(){
-    const csv = buildReportCSVString();
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-
-    const a = document.createElement('a');
-    const ts = isoStamp();
-    const pid = getPidSafe();
-    a.href = URL.createObjectURL(blob);
-    a.download = `${pid}_report_${ts}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
-  }
-
-  // ---- TIMELINE CSV (requested columns + PID prefix)
+  // ---- TIMELINE sampling
   function mapReasonToOffDirection(reason){
     if (reason === "HEAD_LEFT")  return "LEFT";
     if (reason === "HEAD_RIGHT") return "RIGHT";
@@ -979,37 +956,6 @@
       clearInterval(timelineTimer);
       timelineTimer = null;
     }
-  }
-
-  function downloadTimelineCSV(){
-    const csv = buildTimelineCSVString();
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-
-    const a = document.createElement('a');
-    const ts = isoStamp();
-    const pid = getPidSafe();
-    a.href = URL.createObjectURL(blob);
-    a.download = `${pid}_timeline_${ts}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
-  }
-
-  // ---- OFF SUMMARY CSV (PID prefix)
-  function downloadOffSummaryCSV(){
-    const csv = buildOffSummaryCSVString();
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-
-    const a = document.createElement("a");
-    const ts = isoStamp();
-    const pid = getPidSafe();
-    a.href = URL.createObjectURL(blob);
-    a.download = `${pid}_off_summary_${ts}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
   }
 
   // ---- Head tracking (MediaPipe)
@@ -1066,7 +1012,6 @@
 
     video.srcObject = stream;
 
-    // Force video to start even though it is hidden
     await video.play().catch(()=>{});
     await new Promise(res => {
       if (video.readyState >= 2) return res();
@@ -1178,11 +1123,9 @@
 
   if (btnFollowup){
     btnFollowup.addEventListener('click', () => {
-      // פותח את השאלון בטאב חדש
       window.open(FOLLOWUP_FORM_URL, '_blank', 'noopener');
     });
   }
-
 
   // ---- Canvas click logic
   function onPointerDown(e){
