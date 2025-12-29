@@ -169,6 +169,7 @@
       <p>3 אותיות אנגלית + 3 ספרות (למשל ABC123)</p>
       <input id="pid" type="text" placeholder="ABC123" maxlength="6" autocomplete="off" inputmode="latin" />
       <script>
+  window.addEventListener('DOMContentLoaded', () => {
   (function () {
     const pidEl = document.getElementById('pid');
     const btnStart = document.getElementById('btnStart');
@@ -186,6 +187,7 @@
     window.addEventListener('pageshow', update);
     update();
   })();
+});
 </script>
       <div class="pidHint">לאחר הזנת קוד תקין, כפתור "התחל משימה" יופעל</div>
       <div id="secureWarn" class="pidWarn">
