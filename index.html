@@ -208,6 +208,19 @@
     </div>
   </div>
 
+  <!-- Follow-up questionnaire overlay (shown at end) -->
+  <div id="followupOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
+    <div class="card">
+      <h2>תודה רבה! 🙏</h2>
+      <p id="followupMsg">בוא נמשיך לשאלון קצר.</p>
+      <div class="actions">
+        <button id="btnFollowup" class="btn">לשאלון המשך</button>
+        <button id="btnFollowupClose" class="btn early">סגור</button>
+      </div>
+    </div>
+  </div>
+
+
   <!-- Always-on hidden video (camera feed) -->
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
@@ -235,7 +248,9 @@
   // ---- Drive Upload (Google Apps Script Web App)
   const DRIVE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzzL6_C4miqkMb46vs9qVYRnp1_uzq1ZdrSR7fk-J8s1HBIxwN-ad3OAQrNAAd6PHd2/exec";
 
-  // ---- DOM
+  
+  const FOLLOWUP_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA/viewform?usp=header";
+// ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
 
@@ -248,6 +263,11 @@
 
   const taskOverlay = document.getElementById('taskOverlay');
   const btnContinue = document.getElementById('btnContinue');
+
+  const followupOverlay = document.getElementById('followupOverlay');
+  const followupMsgEl = document.getElementById('followupMsg');
+  const btnFollowup = document.getElementById('btnFollowup');
+  const btnFollowupClose = document.getElementById('btnFollowupClose');
 
   const video = document.getElementById('video');
 
@@ -595,6 +615,8 @@
 
     stopTimelineSampling();
 
+    let followupMessage = 'תודה רבה! בוא נמשיך לשאלון קצר.';
+
     const endAt = Date.now();
 
     if (currentAttempt && !currentAttempt.endedAtMs){
@@ -617,7 +639,7 @@
     try{
       await sendAllCSVsToDrive();
       stopHeadTracking();
-      alert('הניסוי הסתיים. 3 קבצי CSV נשלחו ל-Drive שלך (timeline + off_summary + report).');
+      followupMessage = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. עכשיו נמשיך לשאלון קצר.';
     } catch (e){
       console.error(e);
 
@@ -627,10 +649,11 @@
       downloadCSVReport();
 
       stopHeadTracking();
-      alert('הייתה בעיה בשליחת הקבצים ל-Drive, לכן הקבצים הורדו למחשב (timeline + off_summary + report).');
+      followupMessage = 'תודה רבה! הייתה בעיה בשליחת הקבצים ל-Drive, לכן הקבצים הורדו למחשב. עכשיו נמשיך לשאלון קצר.';
     }
 
     resetUI();
+    showFollowupOverlay(followupMessage);
   }
 
   function loop(){
@@ -1141,6 +1164,33 @@
 
   btnEarly.addEventListener('click', () => finish('early'));
   btnContinue.addEventListener('click', () => { if (sessionRunning) startNewTask(); });
+
+  // ---- Follow-up questionnaire
+  function showFollowupOverlay(message){
+    try{
+      if (followupMsgEl) followupMsgEl.textContent = message || 'תודה רבה! בוא נמשיך לשאלון קצר.';
+      if (pidOverlay) pidOverlay.style.display = 'none';
+      if (taskOverlay) taskOverlay.style.display = 'none';
+      if (followupOverlay) followupOverlay.style.display = 'flex';
+    } catch(e){
+      console.error('showFollowupOverlay error', e);
+    }
+  }
+
+  if (btnFollowup){
+    btnFollowup.addEventListener('click', () => {
+      // פותח את השאלון בטאב חדש
+      window.open(FOLLOWUP_FORM_URL, '_blank', 'noopener');
+    });
+  }
+
+  if (btnFollowupClose){
+    btnFollowupClose.addEventListener('click', () => {
+      if (followupOverlay) followupOverlay.style.display = 'none';
+      if (pidOverlay) pidOverlay.style.display = 'flex';
+    });
+  }
+
 
   // ---- Canvas click logic
   function onPointerDown(e){
