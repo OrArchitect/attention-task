@@ -348,8 +348,6 @@
   body: JSON.stringify(payload) // בלי headers בכלל => text/plain => אין preflight => אין CORS
 });
 
-    });
-
     const json = await res.json().catch(() => ({}));
     if (!res.ok || !json.ok){
       throw new Error(json.error || ("Upload failed (HTTP " + res.status + ")"));
