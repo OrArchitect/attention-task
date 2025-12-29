@@ -215,7 +215,8 @@
       <p id="followupMsg">בוא נמשיך לשאלון קצר.</p>
       <div class="actions">
         <button id="btnFollowup" class="btn">לשאלון המשך</button>
-</div>
+        <button id="btnFollowupClose" class="btn early">סגור</button>
+      </div>
     </div>
   </div>
 
@@ -249,10 +250,6 @@
 
   
   const FOLLOWUP_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA/viewform?usp=header";
-  // אופציונלי: כדי להעביר PID אוטומטית ל-Google Forms, שים כאן את שם הפרמטר של השדה (למשל: "entry.123456789")
-  // איך מוצאים? בגוגל פורמס > ⋮ > "קבלת קישור ממולא מראש" > למלא PID לדוגמה > הקישור שתקבל יכלול entry.xxxxx=PID
-  const FOLLOWUP_PID_ENTRY_PARAM = ""; // השאר ריק אם לא רוצים מילוי אוטומטי
-
 // ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
@@ -270,6 +267,8 @@
   const followupOverlay = document.getElementById('followupOverlay');
   const followupMsgEl = document.getElementById('followupMsg');
   const btnFollowup = document.getElementById('btnFollowup');
+  const btnFollowupClose = document.getElementById('btnFollowupClose');
+
   const video = document.getElementById('video');
 
   // ---- State
@@ -556,32 +555,105 @@
     taskActive = true;
     taskOverlay.style.display = 'none';
 
-    // מציגים מיד את חלון הסיום (בלי להמתין להעלאה), כדי שלא תהיה השהייה לנבדק
+    startAttempt();
+  }
+
+  function showContinueOverlay(){
+    taskActive = false;
+    taskOverlay.style.display = 'flex';
+  }
+
+  function completeTask(){
+    currentTask.endedAtMs = Date.now();
+    currentTask.durationMs = currentTask.endedAtMs - currentTask.startedAtMs;
+    currentTask.completed = true;
+
+    log.session.totalTasksCompleted += 1;
+    showContinueOverlay();
+  }
+
+  async function startSession(pid){
+    if (!isSecureEnough()){
+      alert("המצלמה דורשת https או http://localhost. אל תריץ דרך file://");
+      return;
+    }
+
+    btnStart.disabled = true;
+    btnEarly.disabled = true;
+
+    try{
+      await initHeadTracking();  // always-on head tracking
+    } catch (e){
+      console.error(e);
+      alert("יש שגיאה בהפעלת המצלמה/מודל. פתח F12 > Console כדי לראות למה.");
+      btnStart.disabled = false;
+      btnEarly.disabled = true;
+      return;
+    }
+
+    sessionRunning = true;
+    log.meta.pid = pid;
+    log.session.startedAtISO = new Date().toISOString();
+    startAt = Date.now();
+
+    pidEl.disabled = true;
+    pidOverlay.style.display = 'none';
+
+    btnEarly.disabled = false;
+
+    startTimelineSampling();
+    startNewTask();
+    cancelAnimationFrame(rafId);
+    loop();
+  }
+
+  async function finish(reason){
+    if (!sessionRunning) return;
     sessionRunning = false;
     taskActive = false;
-    showFollowupOverlay('תודה רבה! בוא נמשיך לשאלון קצר. (הקבצים נשמרים ברקע)');
+    cancelAnimationFrame(rafId);
 
-    // מעלים ל-Drive ברקע. אם ההעלאה מצליחה/נכשלת – נעדכן רק את הטקסט.
-    (async () => {
-      try{
-        await sendAllCSVsToDrive();
-        stopHeadTracking();
-        if (followupMsgEl) followupMsgEl.textContent = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. בוא נמשיך לשאלון קצר.';
-      } catch (e){
-        console.warn('Drive upload failed; falling back to downloads', e);
-        // fallback: הורדה למחשב (כמו קודם)
-        downloadCSVs();
-        downloadCSVReport();
-        stopHeadTracking();
-        if (followupMsgEl) followupMsgEl.textContent = 'תודה רבה! הייתה בעיה בשליחת הקבצים ל-Drive ולכן הם הורדו למחשב. בוא נמשיך לשאלון קצר.';
-      } finally {
-        // עוצרים את ה-session כדי שלא ימשיכו לולאות
-        sessionRunning = false;
-        taskActive = false;
-        btnEarly.disabled = true;
-        btnStart.disabled = true;
-      }
-    })();
+    stopTimelineSampling();
+
+    let followupMessage = 'תודה רבה! בוא נמשיך לשאלון קצר.';
+
+    const endAt = Date.now();
+
+    if (currentAttempt && !currentAttempt.endedAtMs){
+      endAttempt(false, 'session_end');
+    }
+
+    if (currentTask && !currentTask.endedAtMs){
+      currentTask.endedAtMs = endAt;
+      currentTask.durationMs = currentTask.endedAtMs - currentTask.startedAtMs;
+      currentTask.completed = false;
+    }
+
+    log.session.endedAtISO = new Date().toISOString();
+    log.session.endedReason = reason;
+    log.session.actualDurationMs = endAt - startAt;
+
+    taskOverlay.style.display = 'none';
+
+    // ✅ upload to your Drive (PID folder) + fallback to downloads if needed
+    try{
+      await sendAllCSVsToDrive();
+      stopHeadTracking();
+      followupMessage = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. עכשיו נמשיך לשאלון קצר.';
+    } catch (e){
+      console.error(e);
+
+      // fallback: download locally so you never lose data
+      downloadTimelineCSV();
+      downloadOffSummaryCSV();
+      downloadCSVReport();
+
+      stopHeadTracking();
+      followupMessage = 'תודה רבה! הייתה בעיה בשליחת הקבצים ל-Drive, לכן הקבצים הורדו למחשב. עכשיו נמשיך לשאלון קצר.';
+    }
+
+    resetUI();
+    showFollowupOverlay(followupMessage);
   }
 
   function loop(){
@@ -1108,15 +1180,17 @@
   if (btnFollowup){
     btnFollowup.addEventListener('click', () => {
       // פותח את השאלון בטאב חדש
-      const pid = (log?.meta?.pid || '').trim();
-      let url = FOLLOWUP_FORM_URL;
-      if (FOLLOWUP_PID_ENTRY_PARAM && pid){
-        const sep = url.includes('?') ? '&' : '?';
-        url = url + sep + encodeURIComponent(FOLLOWUP_PID_ENTRY_PARAM) + '=' + encodeURIComponent(pid);
-      }
-      window.open(url, '_blank', 'noopener');
+      window.open(FOLLOWUP_FORM_URL, '_blank', 'noopener');
     });
   }
+
+  if (btnFollowupClose){
+    btnFollowupClose.addEventListener('click', () => {
+      if (followupOverlay) followupOverlay.style.display = 'none';
+      if (pidOverlay) pidOverlay.style.display = 'flex';
+    });
+  }
+
 
   // ---- Canvas click logic
   function onPointerDown(e){
