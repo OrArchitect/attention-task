@@ -213,6 +213,9 @@
   // Timeline sampling
   const TIMELINE_DT_MS = 100; // every 100ms
 
+  // ---- Drive Upload (Google Apps Script Web App)
+  const DRIVE_WEBAPP_URL = \"https://script.google.com/macros/s/AKfycbzzL6_C4miqkMb46vs9qVYRnp1_uzq1ZdrSR7fk-J8s1HBIxwN-ad3OAQrNAAd6PHd2/exec\";
+
   // ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
@@ -297,6 +300,41 @@
 
   function isoStamp(){
     return new Date().toISOString().replace(/[:.]/g,'-');
+  }
+
+  // ---- Upload helpers (UTF-8 safe base64)
+  function base64EncodeUtf8(str){
+    const bytes = new TextEncoder().encode(str);
+    let binary = "";
+    for (let i=0;i<bytes.length;i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  }
+
+  async function uploadFilesToDrive({ pid, files }){
+    if (!DRIVE_WEBAPP_URL || !/^https:\/\/script\.google\.com\/macros\/s\//.test(DRIVE_WEBAPP_URL)){
+      throw new Error("חסר קישור העלאה (Web App URL) של Apps Script.");
+    }
+
+    const payload = {
+      pid,
+      files: (files || []).map(f => ({
+        filename: f.filename,
+        mimeType: f.mimeType || "text/plain",
+        contentBase64: base64EncodeUtf8(f.content || "")
+      }))
+    };
+
+    const res = await fetch(DRIVE_WEBAPP_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.ok){
+      throw new Error(json.error || ("Upload failed (HTTP " + res.status + ")"));
+    }
+    return json;
   }
 
   function resizeCanvas(){
@@ -531,7 +569,7 @@
     loop();
   }
 
-  function finish(reason){
+  async function finish(reason){
     if (!sessionRunning) return;
     sessionRunning = false;
     taskActive = false;
@@ -557,14 +595,23 @@
 
     taskOverlay.style.display = 'none';
 
-    // ✅ downloads (PID prefix)
-    downloadTimelineCSV();
-    downloadOffSummaryCSV();
-    downloadCSVReport();
+    // ✅ upload to your Drive (PID folder) + fallback to downloads if needed
+    try{
+      await sendAllCSVsToDrive();
+      stopHeadTracking();
+      alert('הניסוי הסתיים. 3 קבצי CSV נשלחו ל-Drive שלך (timeline + off_summary + report).');
+    } catch (e){
+      console.error(e);
 
-    stopHeadTracking();
+      // fallback: download locally so you never lose data
+      downloadTimelineCSV();
+      downloadOffSummaryCSV();
+      downloadCSVReport();
 
-    alert('הניסוי הסתיים. ירדו למחשב 3 קבצי CSV (timeline + off_summary + report).');
+      stopHeadTracking();
+      alert('הייתה בעיה בשליחת הקבצים ל-Drive, לכן הקבצים הורדו למחשב (timeline + off_summary + report).');
+    }
+
     resetUI();
   }
 
@@ -609,8 +656,9 @@
     draw();
   }
 
-  // ---- REPORT (per-task CSV)  (PID prefix)
-  function downloadCSVReport(){
+  
+  // ---- CSV builders (strings) - so we can either download or upload
+  function buildReportCSVString(){
     const header = ['מספר משימה','זמן משימה (שניות)','כמות טעויות במשימה'];
     const rows = [header];
 
@@ -638,71 +686,10 @@
     };
 
     const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
-
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8' });
-
-    const a = document.createElement('a');
-    const ts = isoStamp();
-    const pid = getPidSafe();
-    a.href = URL.createObjectURL(blob);
-    a.download = `${pid}_report_${ts}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
+    return '\uFEFF' + csv; // BOM for Excel
   }
 
-  // ---- TIMELINE CSV (requested columns + PID prefix)
-  function mapReasonToOffDirection(reason){
-    if (reason === "HEAD_LEFT")  return "LEFT";
-    if (reason === "HEAD_RIGHT") return "RIGHT";
-    if (reason === "HEAD_UP")    return "UP";
-    if (reason === "HEAD_DOWN")  return "DOWN";
-    return "";
-  }
-
-  function startTimelineSampling(){
-    if (timelineTimer) clearInterval(timelineTimer);
-    timelineTimer = setInterval(() => {
-      if (!sessionRunning) return;
-
-      const now = Date.now();
-      const tFromSessionMs = now - startAt;
-
-      const tFromTaskMs = (currentTask && currentTask.startedAtMs)
-        ? (now - currentTask.startedAtMs)
-        : null;
-
-      const h = window.__HEAD_STATE__ || {};
-      const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
-                  : (h.attention === "OFF_TASK") ? "OFFSCREEN"
-                  : "UNKNOWN";
-
-      const offDir = (h.attention === "OFF_TASK") ? mapReasonToOffDirection(h.reason) : "";
-
-      const timeHundredths = Math.round(tFromSessionMs / 10);
-
-      timeline.push({
-        taskNumber: currentTask ? currentTask.taskIndex : "",
-        tFromSessionMs,
-        tFromTaskMs: (tFromTaskMs == null ? "" : tFromTaskMs),
-        timeHundredths,
-        "onScreen/Offscreen": onOff,
-        connections: connections.length,
-        OffDirection: offDir
-      });
-    }, TIMELINE_DT_MS);
-  }
-
-  function stopTimelineSampling(){
-    if (timelineTimer){
-      clearInterval(timelineTimer);
-      timelineTimer = null;
-    }
-  }
-
-  function downloadTimelineCSV(){
+  function buildTimelineCSVString(){
     const header = ['taskNumber','tFromSessionMs','tFromTaskMs','timeHundredths','onScreen/Offscreen','connections','OffDirection'];
     const rows = [header];
 
@@ -725,23 +712,10 @@
     };
 
     const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
-
-    const BOM = '\uFEFF';
-    const blob = new Blob([BOM + csv], { type: 'text/csv;charset=utf-8' });
-
-    const a = document.createElement('a');
-    const ts = isoStamp();
-    const pid = getPidSafe();
-    a.href = URL.createObjectURL(blob);
-    a.download = `${pid}_timeline_${ts}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(a.href);
+    return '\uFEFF' + csv; // BOM for Excel
   }
 
-  // ---- OFF SUMMARY CSV (PID prefix)
-  function downloadOffSummaryCSV(){
+  function buildOffSummaryCSVString(){
     // Timeline is sampled every TIMELINE_DT_MS.
     // "Event" = continuous OFFSCREEN run; a direction change within OFF counts as new event.
 
@@ -887,8 +861,105 @@
     };
 
     const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
-    const BOM = "\uFEFF";
-    const blob = new Blob([BOM + csv], { type: "text/csv;charset=utf-8" });
+    return "\uFEFF" + csv; // BOM for Excel
+  }
+
+  async function sendAllCSVsToDrive(){
+    const pid = getPidSafe();
+    const ts = isoStamp();
+
+    const files = [
+      { filename: `${pid}_timeline_${ts}.csv`, mimeType: "text/csv;charset=utf-8", content: buildTimelineCSVString() },
+      { filename: `${pid}_off_summary_${ts}.csv`, mimeType: "text/csv;charset=utf-8", content: buildOffSummaryCSVString() },
+      { filename: `${pid}_report_${ts}.csv`, mimeType: "text/csv;charset=utf-8", content: buildReportCSVString() }
+    ];
+
+    return await uploadFilesToDrive({ pid, files });
+  }
+// ---- REPORT (per-task CSV)  (PID prefix)
+  function downloadCSVReport(){
+    const csv = buildReportCSVString();
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+
+    const a = document.createElement('a');
+    const ts = isoStamp();
+    const pid = getPidSafe();
+    a.href = URL.createObjectURL(blob);
+    a.download = `${pid}_report_${ts}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ---- TIMELINE CSV (requested columns + PID prefix)
+  function mapReasonToOffDirection(reason){
+    if (reason === "HEAD_LEFT")  return "LEFT";
+    if (reason === "HEAD_RIGHT") return "RIGHT";
+    if (reason === "HEAD_UP")    return "UP";
+    if (reason === "HEAD_DOWN")  return "DOWN";
+    return "";
+  }
+
+  function startTimelineSampling(){
+    if (timelineTimer) clearInterval(timelineTimer);
+    timelineTimer = setInterval(() => {
+      if (!sessionRunning) return;
+
+      const now = Date.now();
+      const tFromSessionMs = now - startAt;
+
+      const tFromTaskMs = (currentTask && currentTask.startedAtMs)
+        ? (now - currentTask.startedAtMs)
+        : null;
+
+      const h = window.__HEAD_STATE__ || {};
+      const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
+                  : (h.attention === "OFF_TASK") ? "OFFSCREEN"
+                  : "UNKNOWN";
+
+      const offDir = (h.attention === "OFF_TASK") ? mapReasonToOffDirection(h.reason) : "";
+
+      const timeHundredths = Math.round(tFromSessionMs / 10);
+
+      timeline.push({
+        taskNumber: currentTask ? currentTask.taskIndex : "",
+        tFromSessionMs,
+        tFromTaskMs: (tFromTaskMs == null ? "" : tFromTaskMs),
+        timeHundredths,
+        "onScreen/Offscreen": onOff,
+        connections: connections.length,
+        OffDirection: offDir
+      });
+    }, TIMELINE_DT_MS);
+  }
+
+  function stopTimelineSampling(){
+    if (timelineTimer){
+      clearInterval(timelineTimer);
+      timelineTimer = null;
+    }
+  }
+
+  function downloadTimelineCSV(){
+    const csv = buildTimelineCSVString();
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+
+    const a = document.createElement('a');
+    const ts = isoStamp();
+    const pid = getPidSafe();
+    a.href = URL.createObjectURL(blob);
+    a.download = `${pid}_timeline_${ts}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+  }
+
+  // ---- OFF SUMMARY CSV (PID prefix)
+  function downloadOffSummaryCSV(){
+    const csv = buildOffSummaryCSVString();
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
 
     const a = document.createElement("a");
     const ts = isoStamp();
