@@ -139,7 +139,6 @@
     .card p{margin:0 0 14px; color: var(--muted); line-height:1.4}
     .card .actions{display:flex; justify-content:center; gap:10px; flex-wrap:wrap;}
 
-    /* Always-on hidden camera video */
     .hiddenCam{
       position: fixed;
       left: -9999px;
@@ -169,24 +168,24 @@
       <p>3 אותיות אנגלית + 3 ספרות (למשל ABC123)</p>
       <input id="pid" type="text" placeholder="ABC123" maxlength="6" autocomplete="off" inputmode="latin" />
       <script>
-  (function () {
-    const pidEl = document.getElementById('pid');
-    const btnStart = document.getElementById('btnStart');
+        (function () {
+          const pidEl = document.getElementById('pid');
+          const btnStart = document.getElementById('btnStart');
 
-    function validPID(pid){ return /^[A-Z]{3}[0-9]{3}$/.test(pid); }
+          function validPID(pid){ return /^[A-Z]{3}[0-9]{3}$/.test(pid); }
 
-    function update(){
-      let v = (pidEl.value || "").toUpperCase();
-      v = v.replace(/[^A-Z0-9]/g,'').slice(0,6);
-      pidEl.value = v;
-      btnStart.disabled = !validPID(v);
-    }
+          function update(){
+            let v = (pidEl.value || "").toUpperCase();
+            v = v.replace(/[^A-Z0-9]/g,'').slice(0,6);
+            pidEl.value = v;
+            btnStart.disabled = !validPID(v);
+          }
 
-    pidEl.addEventListener('input', update);
-    window.addEventListener('pageshow', update);
-    update();
-  })();
-</script>
+          pidEl.addEventListener('input', update);
+          window.addEventListener('pageshow', update);
+          update();
+        })();
+      </script>
       <div class="pidHint">לאחר הזנת קוד תקין, כפתור "התחל משימה" יופעל</div>
       <div id="secureWarn" class="pidWarn">
         ⚠️ מצלמה דורשת <b>http://localhost</b> או <b>https</b>. אל תריץ דרך file://
@@ -208,7 +207,6 @@
     </div>
   </div>
 
-  <!-- Follow-up questionnaire overlay (shown at end) -->
   <div id="followupOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
     <div class="card">
       <h2>תודה רבה! 🙏</h2>
@@ -219,7 +217,6 @@
     </div>
   </div>
 
-  <!-- Always-on hidden video (camera feed) -->
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
 <script type="module">
@@ -241,13 +238,19 @@
   const PITCH_T = 18;    // degrees
 
   // Timeline sampling
-  const TIMELINE_DT_MS = 100; // every 100ms
+  const TIMELINE_DT_MS = 100;
 
   // ---- Drive Upload (Google Apps Script Web App)
   const DRIVE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzzL6_C4miqkMb46vs9qVYRnp1_uzq1ZdrSR7fk-J8s1HBIxwN-ad3OAQrNAAd6PHd2/exec";
 
-  const FOLLOWUP_FORM_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA/viewform?usp=header";
+  // ---- Follow-up form
+  // Base URL you provided:
+  const FOLLOWUP_FORM_BASE_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdTCgLVjt4LXsNAkXP1H8jxIC5MPsdv1sD93v5lmglckCAzrA/viewform?usp=pp_url";
 
+  // IMPORTANT:
+  // Put here the PID field parameter from Google Forms, e.g. "entry.1234567890"
+  // If you leave it empty ("") the form will open normally without PID prefill.
+  const FORM_PID_ENTRY_PARAM = "entry.404955311";
   // ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
@@ -265,7 +268,6 @@
   const followupOverlay = document.getElementById('followupOverlay');
   const followupMsgEl = document.getElementById('followupMsg');
   const btnFollowup = document.getElementById('btnFollowup');
-  const btnFollowupClose = document.getElementById('btnFollowupClose'); // (kept harmlessly; element doesn't exist)
 
   const video = document.getElementById('video');
 
@@ -274,6 +276,9 @@
   let taskActive = false;
   let startAt = null;
   let rafId = null;
+
+  // We'll keep the participant PID available for followup link even after resetUI()
+  let followupPid = null;
 
   let dots = [];
   let connections = [];
@@ -302,12 +307,11 @@
   let currentTask = null;
   let currentAttempt = null;
 
-  // Head tracking state
+  // Head tracking
   let faceLandmarker = null;
   let headRunning = false;
   let lastVideoTime = -1;
 
-  // Bridge state
   window.__HEAD_STATE__ = {
     tsPerf: null,
     attention: "WAITING",
@@ -317,7 +321,6 @@
     ok: false
   };
 
-  // Timeline
   const timeline = [];
   let timelineTimer = null;
 
@@ -337,6 +340,27 @@
 
   function isoStamp(){
     return new Date().toISOString().replace(/[:.]/g,'-');
+  }
+
+  // ---- beforeunload warning (ONLY during active session)
+  window.addEventListener('beforeunload', (e) => {
+    if (!sessionRunning) return;
+    e.preventDefault();
+    e.returnValue = ""; // triggers browser generic warning (where supported)
+  });
+
+  // ---- Followup URL builder (PID prefill if FORM_PID_ENTRY_PARAM is set)
+  function buildFollowupUrl(){
+    try{
+      const url = new URL(FOLLOWUP_FORM_BASE_URL);
+      if (FORM_PID_ENTRY_PARAM && typeof FORM_PID_ENTRY_PARAM === "string" && FORM_PID_ENTRY_PARAM.startsWith("entry.")) {
+        url.searchParams.set(FORM_PID_ENTRY_PARAM, (followupPid || "").toUpperCase());
+      }
+      return url.toString();
+    } catch {
+      // fallback (shouldn't happen)
+      return FOLLOWUP_FORM_BASE_URL;
+    }
   }
 
   // ---- Upload helpers (UTF-8 safe base64)
@@ -363,7 +387,7 @@
 
     const res = await fetch(DRIVE_WEBAPP_URL, {
       method: "POST",
-      body: JSON.stringify(payload) // בלי headers בכלל => text/plain => אין preflight => אין CORS
+      body: JSON.stringify(payload) // no headers => text/plain => avoids preflight in many cases
     });
 
     const json = await res.json().catch(() => ({}));
@@ -580,7 +604,7 @@
     btnEarly.disabled = true;
 
     try{
-      await initHeadTracking();  // always-on head tracking
+      await initHeadTracking();
     } catch (e){
       console.error(e);
       alert("יש שגיאה בהפעלת המצלמה/מודל. פתח F12 > Console כדי לראות למה.");
@@ -591,6 +615,7 @@
 
     sessionRunning = true;
     log.meta.pid = pid;
+    followupPid = pid; // keep PID for the form link
     log.session.startedAtISO = new Date().toISOString();
     startAt = Date.now();
 
@@ -613,8 +638,6 @@
 
     stopTimelineSampling();
 
-    let followupMessage = 'תודה רבה! בוא נמשיך לשאלון קצר.';
-
     const endAt = Date.now();
 
     if (currentAttempt && !currentAttempt.endedAtMs){
@@ -633,9 +656,9 @@
 
     taskOverlay.style.display = 'none';
 
-    // ✅ Prepare CSV payload now (so we can reset UI immediately),
-    // and send to Drive in the background (non-blocking for participant).
+    // Prepare payload for background upload
     const pidSafe = getPidSafe();
+    followupPid = pidSafe; // keep PID even after resetUI()
     const ts = isoStamp();
 
     const timelineCsv = buildTimelineCSVString();
@@ -648,25 +671,21 @@
       { filename: `${pidSafe}_report_${ts}.csv`,       mimeType: "text/csv;charset=utf-8", content: reportCsv }
     ];
 
-    // Stop camera immediately (no need to keep it running while we upload)
     stopHeadTracking();
 
-    // Show the follow-up overlay immediately (no waiting)
-    followupMessage = ':) תודה רבה! בואו נמשיך לשאלון אחרון וקצר...באמת.…';
+    // Show overlay immediately (no waiting)
     resetUI();
-    showFollowupOverlay(followupMessage);
+    showFollowupOverlay('תודה רבה! אפשר להמשיך לשאלון קצר. הקבצים נשלחים עכשיו ברקע…');
 
-    // Background upload (do NOT await)
+    // Background upload (non-blocking)
     uploadFilesToDrive({ pid: pidSafe, files: filesToSend })
       .then(() => {
-        // Update message (optional, no UI changes)
         if (followupMsgEl) {
-          followupMsgEl.textContent = ' תודה רבה!  בואו נמשיך לשאלון קצר ואחרון :).';
+          followupMsgEl.textContent = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. אפשר להמשיך לשאלון קצר.';
         }
       })
       .catch((e) => {
         console.error(e);
-        // Don't force downloads (would interrupt participant); just update the message.
         if (followupMsgEl) {
           followupMsgEl.textContent = 'תודה רבה! אפשר להמשיך לשאלון קצר. (שימו לב: הייתה בעיה בשליחת הקבצים ל-Drive — אנא עדכנו את החוקר/ת.)';
         }
@@ -714,7 +733,7 @@
     draw();
   }
 
-  // ---- CSV builders (strings) - so we can either download or upload
+  // ---- CSV builders
   function buildReportCSVString(){
     const header = ['מספר משימה','זמן משימה (שניות)','כמות טעויות במשימה'];
     const rows = [header];
@@ -743,7 +762,7 @@
     };
 
     const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
-    return '\uFEFF' + csv; // BOM for Excel
+    return '\uFEFF' + csv;
   }
 
   function buildTimelineCSVString(){
@@ -769,7 +788,7 @@
     };
 
     const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
-    return '\uFEFF' + csv; // BOM for Excel
+    return '\uFEFF' + csv;
   }
 
   function buildOffSummaryCSVString(){
@@ -781,12 +800,10 @@
         byTask.set(key, {
           taskNumber: key,
           totalTimePerTaskMs: 0,
-
           upCount: 0, upTimeMs: 0,
           downCount: 0, downTimeMs: 0,
           leftCount: 0, leftTimeMs: 0,
           rightCount: 0, rightTimeMs: 0,
-
           totalOffMs: 0
         });
       }
@@ -1123,7 +1140,7 @@
 
   if (btnFollowup){
     btnFollowup.addEventListener('click', () => {
-      window.open(FOLLOWUP_FORM_URL, '_blank', 'noopener');
+      window.open(buildFollowupUrl(), '_blank', 'noopener');
     });
   }
 
