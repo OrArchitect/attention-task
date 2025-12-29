@@ -210,7 +210,7 @@
   <div id="followupOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
     <div class="card">
       <h2>תודה רבה! 🙏</h2>
-      <p id="followupMsg">בוא נמשיך לשאלון קצר.</p>
+      <p id="followupMsg">בואו נמשיך לשאלון קצר(ואחרון).</p>
       <div class="actions">
         <button id="btnFollowup" class="btn">לשאלון המשך</button>
       </div>
@@ -681,13 +681,13 @@
     uploadFilesToDrive({ pid: pidSafe, files: filesToSend })
       .then(() => {
         if (followupMsgEl) {
-          followupMsgEl.textContent = 'תודה רבה! הקבצים נשלחו בהצלחה ל-Drive. אפשר להמשיך לשאלון קצר.';
+          followupMsgEl.textContent = 'תודה רבה! בואו נמשיך לשאלון קצר(ואחרון)';
         }
       })
       .catch((e) => {
         console.error(e);
         if (followupMsgEl) {
-          followupMsgEl.textContent = 'תודה רבה! אפשר להמשיך לשאלון קצר. (שימו לב: הייתה בעיה בשליחת הקבצים ל-Drive — אנא עדכנו את החוקר/ת.)';
+          followupMsgEl.textContent = 'תודה רבה! בואו נמשיך לשאלון קצר(ואחרון) (שימו לב: הייתה בעיה בשליחת הקבצים ל-Drive — אנא עדכנו את החוקר/ת.)';
         }
       });
   }
@@ -1129,7 +1129,7 @@
   // ---- Follow-up questionnaire
   function showFollowupOverlay(message){
     try{
-      if (followupMsgEl) followupMsgEl.textContent = message || 'תודה רבה! בוא נמשיך לשאלון קצר.';
+      if (followupMsgEl) followupMsgEl.textContent = message || 'תודה רבה! בואו נמשיך לשאלון קצר(ואחרון)';
       if (pidOverlay) pidOverlay.style.display = 'none';
       if (taskOverlay) taskOverlay.style.display = 'none';
       if (followupOverlay) followupOverlay.style.display = 'flex';
