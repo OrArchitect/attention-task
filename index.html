@@ -343,10 +343,11 @@
       }))
     };
 
-    const res = await fetch(DRIVE_WEBAPP_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
+   const res = await fetch(DRIVE_WEBAPP_URL, {
+  method: "POST",
+  body: JSON.stringify(payload) // בלי headers בכלל => text/plain => אין preflight => אין CORS
+});
+
     });
 
     const json = await res.json().catch(() => ({}));
