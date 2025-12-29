@@ -168,6 +168,25 @@
       <h2>הזינו מזהה נבדק</h2>
       <p>3 אותיות אנגלית + 3 ספרות (למשל ABC123)</p>
       <input id="pid" type="text" placeholder="ABC123" maxlength="6" autocomplete="off" inputmode="latin" />
+      <script>
+  (function () {
+    const pidEl = document.getElementById('pid');
+    const btnStart = document.getElementById('btnStart');
+
+    function validPID(pid){ return /^[A-Z]{3}[0-9]{3}$/.test(pid); }
+
+    function update(){
+      let v = (pidEl.value || "").toUpperCase();
+      v = v.replace(/[^A-Z0-9]/g,'').slice(0,6);
+      pidEl.value = v;
+      btnStart.disabled = !validPID(v);
+    }
+
+    pidEl.addEventListener('input', update);
+    window.addEventListener('pageshow', update);
+    update();
+  })();
+</script>
       <div class="pidHint">לאחר הזנת קוד תקין, כפתור "התחל משימה" יופעל</div>
       <div id="secureWarn" class="pidWarn">
         ⚠️ מצלמה דורשת <b>http://localhost</b> או <b>https</b>. אל תריץ דרך file://
