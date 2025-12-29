@@ -215,7 +215,6 @@
       <p id="followupMsg">בוא נמשיך לשאלון קצר.</p>
       <div class="actions">
         <button id="btnFollowup" class="btn">לשאלון המשך</button>
-        <button id="btnFollowupClose" class="btn early">סגור</button>
       </div>
     </div>
   </div>
@@ -1184,12 +1183,6 @@
     });
   }
 
-  if (btnFollowupClose){
-    btnFollowupClose.addEventListener('click', () => {
-      if (followupOverlay) followupOverlay.style.display = 'none';
-      if (pidOverlay) pidOverlay.style.display = 'flex';
-    });
-  }
 
 
   // ---- Canvas click logic
