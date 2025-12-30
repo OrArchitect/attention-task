@@ -225,6 +225,20 @@
   const EXP_DURATION_MS = 10 * 60 * 1000;
   const DOT_COUNT = 16;
 
+// ---- One-time participation (minimal client-side guard)
+// Marks completion only when participant finishes (early or timeout).
+const ONCE_KEY = "study_completed_v1";
+function hasCompletedOnce(){
+  try { return localStorage.getItem(ONCE_KEY) === "true"; } catch { return false; }
+}
+function markCompletedOnce(){
+  try {
+    localStorage.setItem(ONCE_KEY, "true");
+    localStorage.setItem(ONCE_KEY + "_ts", new Date().toISOString());
+  } catch {}
+}
+
+
   const DOT_RADIUS = 14;
   const DOT_LABEL_SIZE = 14;
   const LINE_WIDTH = 3;
@@ -632,6 +646,8 @@
 
   async function finish(reason){
     if (!sessionRunning) return;
+    // Mark as completed ONLY on real completion states
+    if (reason === 'early' || reason === 'timeout') markCompletedOnce();
     sessionRunning = false;
     taskActive = false;
     cancelAnimationFrame(rafId);
@@ -1115,6 +1131,10 @@
   });
 
   btnStart.addEventListener('click', async () => {
+    if (hasCompletedOnce()){
+      alert('נראה שכבר השתתפת במשימה הזו. תודה רבה!');
+      return;
+    }
     const pid = (pidEl.value || '').toUpperCase();
     if (!validPID(pid)){
       alert('קוד לא תקין. יש להזין 3 אותיות אנגלית + 3 ספרות (למשל ABC123).');
