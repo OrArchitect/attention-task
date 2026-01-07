@@ -222,7 +222,8 @@
 <script type="module">
 (() => {
   // ---- Config
-  const EXP_DURATION_MS = 15 * 60 * 1000;
+  const EXP_DURATION_MIN = 15;
+  const EXP_DURATION_MS = EXP_DURATION_MIN * 60 * 1000;
   const DOT_COUNT = 16;
 
 // ---- One-time participation (minimal client-side guard)
@@ -689,36 +690,27 @@ function markCompletedOnce(){
 
     stopHeadTracking();
 
-   // Show overlay immediately (no waiting)
-resetUI();
+    // Show overlay immediately (no waiting)
+    resetUI({ showPidOverlay: false });
 
-let followupMessage = 'תודה רבה! כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
-
-if (reason === 'timeout') {
-  followupMessage =
-    `תודה רבה! סיימת את ${EXP_DURATION_MIN} דקות המטלה. ` +
-    'כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
-}
-
-if (reason === 'early') {
-  followupMessage =
-    'תודה רבה! סיימת את המטלה. ' +
-    'כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
-}
-
-showFollowupOverlay(followupMessage);
+    let followupMessage = 'תודה רבה! כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
+    if (reason === 'timeout') {
+      followupMessage = `תודה רבה! סיימת את ${EXP_DURATION_MIN} דקות המטלה. כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.`;
+    } else if (reason === 'early') {
+      followupMessage = 'תודה רבה! סיימת את המטלה. כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
+    }
+    showFollowupOverlay(followupMessage);
 
     // Background upload (non-blocking)
     uploadFilesToDrive({ pid: pidSafe, files: filesToSend })
       .then(() => {
-        if (followupMsgEl) {
-          followupMsgEl.textContent = 'תודה רבה! בואו נמשיך לשאלון קצר(ואחרון)';
-        }
+        // Message already shown; keep it as-is
       })
       .catch((e) => {
         console.error(e);
         if (followupMsgEl) {
-          followupMsgEl.textContent = 'תודה רבה! בואו נמשיך לשאלון קצר(ואחרון) (שימו לב: הייתה בעיה בשליחת הקבצים ל-Drive — אנא עדכנו את החוקר/ת.)';
+          const base = followupMsgEl.textContent || '';
+          followupMsgEl.textContent = base + ' (שימו לב: הייתה בעיה בשליחת הקבצים ל-Drive — אנא עדכנו את החוקר/ת.)';
         }
       });
   }
@@ -733,7 +725,7 @@ showFollowupOverlay(followupMessage);
     rafId = requestAnimationFrame(loop);
   }
 
-  function resetUI(){
+  function resetUI({ showPidOverlay = true } = {}){
     sessionRunning = false;
     taskActive = false;
     taskIndex = 0;
@@ -743,7 +735,7 @@ showFollowupOverlay(followupMessage);
     currentTask = null;
     currentAttempt = null;
 
-    pidOverlay.style.display = 'flex';
+    pidOverlay.style.display = showPidOverlay ? 'flex' : 'none';
     pidEl.disabled = false;
     pidEl.value = '';
     btnEarly.disabled = true;
