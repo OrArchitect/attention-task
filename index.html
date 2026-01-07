@@ -689,9 +689,24 @@ function markCompletedOnce(){
 
     stopHeadTracking();
 
-    // Show overlay immediately (no waiting)
-    resetUI();
-    showFollowupOverlay('תודה רבה! בואו נמשיך לשאלון קצר...ואחרון:)…');
+   // Show overlay immediately (no waiting)
+resetUI();
+
+let followupMessage = 'תודה רבה! כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
+
+if (reason === 'timeout') {
+  followupMessage =
+    `תודה רבה! סיימת את ${EXP_DURATION_MIN} דקות המטלה. ` +
+    'כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
+}
+
+if (reason === 'early') {
+  followupMessage =
+    'תודה רבה! סיימת את המטלה. ' +
+    'כדי לעבור לשאלון קצר ואחרון, לחץ על הכפתור.';
+}
+
+showFollowupOverlay(followupMessage);
 
     // Background upload (non-blocking)
     uploadFilesToDrive({ pid: pidSafe, files: filesToSend })
