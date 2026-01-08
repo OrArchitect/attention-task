@@ -153,45 +153,62 @@
       .stage{padding-top: 112px;}
       .btn{min-width: 120px;}
     }
+  
+    /* Instructions block inside PID card */
+    .instructions{
+      margin: 0 0 14px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+      text-align: right;
+      white-space: pre-line;
+    }
+    .pidActions{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      align-items:center;
+    }
+
   </style>
 </head>
 
 <body>
   <div class="topBar">
-    <button id="btnStart" class="btn" disabled>התחל משימה</button>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
   <div id="pidOverlay" class="pidOverlay">
+    
     <div class="pidCard">
-      <h2>הזינו מזהה נבדק</h2>
-      <p>3 אותיות אנגלית + 3 ספרות (למשל ABC123)</p>
-      <input id="pid" type="text" placeholder="ABC123" maxlength="6" autocomplete="off" inputmode="latin" />
-      <script>
-        (function () {
-          const pidEl = document.getElementById('pid');
-          const btnStart = document.getElementById('btnStart');
+      <h2>לפני שמתחילים</h2>
 
-          function validPID(pid){ return /^[A-Z]{3}[0-9]{3}$/.test(pid); }
+      <div class="instructions">
+במשימה זו תחברו נקודות על גבי המסך לפי סדר מספרי עולה
+(1 → 2 → 3 → 4 → …).
+לבחירת ספרה, לחצו עליה עם סמן העכבר.
+אם בחרתם ספרה בטעות, ניתן לבטל את הבחירה בלחיצה נוספת.
+משך המשימה הוא כ־15 דקות.
+בכל שלב ניתן לעצור באמצעות כפתור „סיום מוקדם” המופיע בראש המסך.
+לאחר תחילת המשימה, ייתכן עיכוב קצר עד להופעת המספרים על גבי המסך —
+אנא המתינו מספר שניות עד שהמשימה נטענת במלואה.
+לפני תחילת המשימה, אנא ודאו שהזנתם את הקוד האישי שלכם.
+תודה על השתתפותכם, ובהצלחה 🙂
+      </div>
 
-          function update(){
-            let v = (pidEl.value || "").toUpperCase();
-            v = v.replace(/[^A-Z0-9]/g,'').slice(0,6);
-            pidEl.value = v;
-            btnStart.disabled = !validPID(v);
-          }
-
-          pidEl.addEventListener('input', update);
-          window.addEventListener('pageshow', update);
-          update();
-        })();
-      </script>
-      <div class="pidHint">לאחר הזנת קוד תקין, כפתור "התחל משימה" יופעל</div>
-      <div id="secureWarn" class="pidWarn">
-        ⚠️ מצלמה דורשת <b>http://localhost</b> או <b>https</b>. אל תריץ דרך file://
+      <div class="pidActions">
+        <div style="color: var(--muted); font-size: 14px;">הזינו קוד אישי: 3 אותיות אנגלית + 3 ספרות (למשל ABC123)</div>
+        <input id="pid" type="text" placeholder="ABC123" maxlength="6" autocomplete="off" inputmode="latin" />
+        <button id="btnStartInline" class="btn" disabled>התחל</button>
+        <div class="pidHint">לאחר הזנת קוד תקין, לחצו על "התחל"</div>
+        <div id="secureWarn" class="pidWarn">
+          ⚠️ מצלמה דורשת <b>http://localhost</b> או <b>https</b>. אל תריץ דרך file://
+        </div>
       </div>
     </div>
+
   </div>
+</div>
 
   <div class="stage">
     <canvas id="cv"></canvas>
@@ -226,31 +243,33 @@
   const EXP_DURATION_MS = EXP_DURATION_MIN * 60 * 1000;
   const DOT_COUNT = 16;
 
-  // ---- One-time participation (minimal client-side guard)
-  // Marks completion only when participant finishes (early or timeout).
-  const ONCE_KEY = "study_completed_v1";
-  function hasCompletedOnce(){
-    try { return localStorage.getItem(ONCE_KEY) === "true"; } catch { return false; }
-  }
-  function markCompletedOnce(){
-    try {
-      localStorage.setItem(ONCE_KEY, "true");
-      localStorage.setItem(ONCE_KEY + "_ts", new Date().toISOString());
-    } catch {}
-  }
+// ---- One-time participation (minimal client-side guard)
+// Marks completion only when participant finishes (early or timeout).
+const ONCE_KEY = "study_completed_v1";
+function hasCompletedOnce(){
+  try { return localStorage.getItem(ONCE_KEY) === "true"; } catch { return false; }
+}
+function markCompletedOnce(){
+  try {
+    localStorage.setItem(ONCE_KEY, "true");
+    localStorage.setItem(ONCE_KEY + "_ts", new Date().toISOString());
+  } catch {}
+}
+
 
   const DOT_RADIUS = 14;
   const DOT_LABEL_SIZE = 14;
   const LINE_WIDTH = 3;
 
+  // Keep random dots from sitting on the connecting line between other dots.
+  // Tip: If you still see dots “on” lines (because the drawn line passes through the dot circle),
+  // increase this to ~22–25px.
+  const MIN_LINE_DIST = 24;
+
+
   const MIN_DIST = 52;
   const EDGE_PAD = 28;
   const MAX_TRIES = 5000;
-
-  // NEW: Keep random dots from falling on a straight line between existing dots
-  // 14–20px is a good range. If you want to avoid "almost collinear" cases more aggressively,
-  // increase to ~22–25.
-  const MIN_LINE_DIST = 18;
 
   // Head thresholds
   const YAW_T = 29;      // degrees
@@ -270,7 +289,6 @@
   // Put here the PID field parameter from Google Forms, e.g. "entry.1234567890"
   // If you leave it empty ("") the form will open normally without PID prefill.
   const FORM_PID_ENTRY_PARAM = "entry.404955311";
-
   // ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
@@ -278,8 +296,7 @@
   const pidEl = document.getElementById('pid');
   const pidOverlay = document.getElementById('pidOverlay');
   const secureWarn = document.getElementById('secureWarn');
-
-  const btnStart = document.getElementById('btnStart');
+  const btnStartInline = document.getElementById('btnStartInline');
   const btnEarly = document.getElementById('btnEarly');
 
   const taskOverlay = document.getElementById('taskOverlay');
@@ -429,6 +446,19 @@
   function randInt(min, max){ return Math.floor(Math.random()*(max-min+1)) + min; }
   function dist(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
 
+  // Distance from point p to segment a-b (in CSS pixels)
+  function distPointToSegment(p, a, b){
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx*dx + dy*dy;
+    if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+    let t = ((p.x - a.x)*dx + (p.y - a.y)*dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    const proj = { x: a.x + t*dx, y: a.y + t*dy };
+    return Math.hypot(p.x - proj.x, p.y - proj.y);
+  }
+
+
   function getPointerPos(e){
     const rect = cv.getBoundingClientRect();
     const clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
@@ -446,20 +476,6 @@
     return best;
   }
 
-  // NEW helper: distance from point to segment (a-b)
-  function distPointToSegment(p, a, b){
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const l2 = dx*dx + dy*dy;
-    if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
-
-    let t = ((p.x - a.x)*dx + (p.y - a.y)*dy) / l2;
-    t = Math.max(0, Math.min(1, t));
-
-    const proj = { x: a.x + t*dx, y: a.y + t*dy };
-    return Math.hypot(p.x - proj.x, p.y - proj.y);
-  }
-
   function generateDots(){
     const rect = cv.getBoundingClientRect();
     const w = rect.width, h = rect.height;
@@ -471,21 +487,12 @@
       const p = { x: randInt(EDGE_PAD, Math.floor(w-EDGE_PAD)),
                   y: randInt(EDGE_PAD, Math.floor(h-EDGE_PAD)) };
       let ok = true;
-
-      // changed loop (still enforces MIN_DIST, plus prevents placing on a line between any pair)
       for (let i = 0; i < pts.length && ok; i++){
-        if (dist(p, pts[i]) < MIN_DIST) {
-          ok = false;
-          break;
-        }
+        if (dist(p, pts[i]) < MIN_DIST) { ok = false; break; }
         for (let j = i + 1; j < pts.length && ok; j++){
-          if (distPointToSegment(p, pts[i], pts[j]) < MIN_LINE_DIST){
-            ok = false;
-            break;
-          }
+          if (distPointToSegment(p, pts[i], pts[j]) <= MIN_LINE_DIST) { ok = false; break; }
         }
       }
-
       if (ok) pts.push(p);
     }
 
@@ -495,21 +502,12 @@
         const p = { x: randInt(EDGE_PAD, Math.floor(w-EDGE_PAD)),
                     y: randInt(EDGE_PAD, Math.floor(h-EDGE_PAD)) };
         let ok = true;
-
-        // changed loop (same logic, but with relaxed MIN_DIST fallback)
         for (let i = 0; i < pts.length && ok; i++){
-          if (dist(p, pts[i]) < Math.max(30, MIN_DIST*0.75)) {
-            ok = false;
-            break;
-          }
-          for (let j = i + 1; j < pts.length && ok; j++){
-            if (distPointToSegment(p, pts[i], pts[j]) < MIN_LINE_DIST){
-              ok = false;
-              break;
-            }
-          }
+        if (dist(p, pts[i]) < Math.max(30, MIN_DIST*0.75)) { ok = false; break; }
+        for (let j = i + 1; j < pts.length && ok; j++){
+          if (distPointToSegment(p, pts[i], pts[j]) <= MIN_LINE_DIST) { ok = false; break; }
         }
-
+      }
         if (ok) pts.push(p);
       }
     }
@@ -658,7 +656,7 @@
       return;
     }
 
-    btnStart.disabled = true;
+    btnStartInline.disabled = true;
     btnEarly.disabled = true;
 
     try{
@@ -666,7 +664,7 @@
     } catch (e){
       console.error(e);
       alert("יש שגיאה בהפעלת המצלמה/מודל. פתח F12 > Console כדי לראות למה.");
-      btnStart.disabled = false;
+      btnStartInline.disabled = false;
       btnEarly.disabled = true;
       return;
     }
@@ -781,8 +779,9 @@
     pidOverlay.style.display = showPidOverlay ? 'flex' : 'none';
     pidEl.disabled = false;
     pidEl.value = '';
+    secureWarn.style.display = isSecureEnough() ? "none" : "block";
     btnEarly.disabled = true;
-    btnStart.disabled = true;
+    btnStartInline.disabled = true;
 
     log.meta.pid = null;
     log.session.startedAtISO = null;
@@ -1177,10 +1176,17 @@
     pidEl.value = v;
 
     secureWarn.style.display = isSecureEnough() ? "none" : "block";
-    btnStart.disabled = !validPID(v);
+    btnStartInline.disabled = !validPID(v);
   });
 
-  btnStart.addEventListener('click', async () => {
+  // Keep button state after back/forward cache restores
+  window.addEventListener('pageshow', () => {
+    try { pidEl.dispatchEvent(new Event('input')); } catch {}
+  });
+
+;
+
+  btnStartInline.addEventListener('click', async () => {
     if (hasCompletedOnce()){
       alert('נראה שכבר השתתפת במשימה הזו. תודה רבה!');
       return;
