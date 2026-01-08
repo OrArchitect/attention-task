@@ -226,19 +226,18 @@
   const EXP_DURATION_MS = EXP_DURATION_MIN * 60 * 1000;
   const DOT_COUNT = 16;
 
-// ---- One-time participation (minimal client-side guard)
-// Marks completion only when participant finishes (early or timeout).
-const ONCE_KEY = "study_completed_v1";
-function hasCompletedOnce(){
-  try { return localStorage.getItem(ONCE_KEY) === "true"; } catch { return false; }
-}
-function markCompletedOnce(){
-  try {
-    localStorage.setItem(ONCE_KEY, "true");
-    localStorage.setItem(ONCE_KEY + "_ts", new Date().toISOString());
-  } catch {}
-}
-
+  // ---- One-time participation (minimal client-side guard)
+  // Marks completion only when participant finishes (early or timeout).
+  const ONCE_KEY = "study_completed_v1";
+  function hasCompletedOnce(){
+    try { return localStorage.getItem(ONCE_KEY) === "true"; } catch { return false; }
+  }
+  function markCompletedOnce(){
+    try {
+      localStorage.setItem(ONCE_KEY, "true");
+      localStorage.setItem(ONCE_KEY + "_ts", new Date().toISOString());
+    } catch {}
+  }
 
   const DOT_RADIUS = 14;
   const DOT_LABEL_SIZE = 14;
@@ -247,6 +246,11 @@ function markCompletedOnce(){
   const MIN_DIST = 52;
   const EDGE_PAD = 28;
   const MAX_TRIES = 5000;
+
+  // NEW: Keep random dots from falling on a straight line between existing dots
+  // 14–20px is a good range. If you want to avoid "almost collinear" cases more aggressively,
+  // increase to ~22–25.
+  const MIN_LINE_DIST = 18;
 
   // Head thresholds
   const YAW_T = 29;      // degrees
@@ -266,6 +270,7 @@ function markCompletedOnce(){
   // Put here the PID field parameter from Google Forms, e.g. "entry.1234567890"
   // If you leave it empty ("") the form will open normally without PID prefill.
   const FORM_PID_ENTRY_PARAM = "entry.404955311";
+
   // ---- DOM
   const cv = document.getElementById('cv');
   const ctx = cv.getContext('2d');
@@ -441,6 +446,20 @@ function markCompletedOnce(){
     return best;
   }
 
+  // NEW helper: distance from point to segment (a-b)
+  function distPointToSegment(p, a, b){
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const l2 = dx*dx + dy*dy;
+    if (l2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+
+    let t = ((p.x - a.x)*dx + (p.y - a.y)*dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+
+    const proj = { x: a.x + t*dx, y: a.y + t*dy };
+    return Math.hypot(p.x - proj.x, p.y - proj.y);
+  }
+
   function generateDots(){
     const rect = cv.getBoundingClientRect();
     const w = rect.width, h = rect.height;
@@ -452,9 +471,21 @@ function markCompletedOnce(){
       const p = { x: randInt(EDGE_PAD, Math.floor(w-EDGE_PAD)),
                   y: randInt(EDGE_PAD, Math.floor(h-EDGE_PAD)) };
       let ok = true;
-      for (const q of pts){
-        if (dist(p,q) < MIN_DIST) { ok = false; break; }
+
+      // changed loop (still enforces MIN_DIST, plus prevents placing on a line between any pair)
+      for (let i = 0; i < pts.length && ok; i++){
+        if (dist(p, pts[i]) < MIN_DIST) {
+          ok = false;
+          break;
+        }
+        for (let j = i + 1; j < pts.length && ok; j++){
+          if (distPointToSegment(p, pts[i], pts[j]) < MIN_LINE_DIST){
+            ok = false;
+            break;
+          }
+        }
       }
+
       if (ok) pts.push(p);
     }
 
@@ -464,9 +495,21 @@ function markCompletedOnce(){
         const p = { x: randInt(EDGE_PAD, Math.floor(w-EDGE_PAD)),
                     y: randInt(EDGE_PAD, Math.floor(h-EDGE_PAD)) };
         let ok = true;
-        for (const q of pts){
-          if (dist(p,q) < Math.max(30, MIN_DIST*0.75)) { ok = false; break; }
+
+        // changed loop (same logic, but with relaxed MIN_DIST fallback)
+        for (let i = 0; i < pts.length && ok; i++){
+          if (dist(p, pts[i]) < Math.max(30, MIN_DIST*0.75)) {
+            ok = false;
+            break;
+          }
+          for (let j = i + 1; j < pts.length && ok; j++){
+            if (distPointToSegment(p, pts[i], pts[j]) < MIN_LINE_DIST){
+              ok = false;
+              break;
+            }
+          }
         }
+
         if (ok) pts.push(p);
       }
     }
