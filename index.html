@@ -679,6 +679,7 @@ function markCompletedOnce(){
 
     if (ok){
       endAttempt(true, 'completed_correct');
+      console.log('Task completed correctly');
       completeTask();
     } else {
       endAttempt(false, 'completed_wrong');
@@ -713,7 +714,10 @@ function markCompletedOnce(){
 
   function showContinueOverlay(){
     taskActive = false;
+    if (followupOverlay) followupOverlay.style.display = 'none';
+    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
     taskOverlay.style.display = 'flex';
+    taskOverlay.setAttribute('aria-hidden', 'false');
   }
 
   function buildCalibrationQueue(){
@@ -1378,10 +1382,16 @@ function markCompletedOnce(){
       ok: false
     };
 
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error('getUserMedia is not available in this browser/context');
+    }
+
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: "user" },
       audio: false
     });
+
+    if (!stream) throw new Error('Camera stream was not created');
 
     video.srcObject = stream;
     await video.play().catch(()=>{});
