@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Gaze Tracking (Clean)</title>
+  <title>Connect-the-Dots + Head Tracking (Clean)</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -170,6 +170,22 @@
       align-items:center;
     }
 
+
+    .calib-point{
+      position:absolute;
+      width:22px;
+      height:22px;
+      border-radius:50%;
+      border:none;
+      cursor:pointer;
+      transform:translate(-50%,-50%);
+      background:rgba(90,145,255,0.95);
+      box-shadow:0 0 0 0 rgba(90,145,255,.35);
+      transition:transform .12s ease, box-shadow .12s ease, opacity .2s ease;
+    }
+    .calib-point:hover{ transform:translate(-50%,-50%) scale(1.08); }
+    .calib-point.done{ background:rgba(34,197,94,.95); }
+
   </style>
 </head>
 
@@ -234,8 +250,19 @@
     </div>
   </div>
 
+  
+
+  <div id="calibOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
+    <div class="card" style="max-width:900px; position:relative; min-height:520px;">
+      <h2 id="calibTitle">כיול מבט קצר</h2>
+      <p id="calibText">לפני תחילת המשימה, הסתכלו על כל נקודה ולחצו עליה 3 פעמים. לאחר סיום הכיול, המטלה תתחיל אוטומטית.</p>
+      <div id="calibStage" style="position:relative; width:100%; height:420px; margin-top:10px;"></div>
+    </div>
+  </div>
+
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
+<script src="https://unpkg.com/@webgazer-ts/core@latest/dist/webgazer-ts.umd.cjs"></script>
 <script type="module">
 (() => {
   // ---- Config
@@ -271,16 +298,6 @@ function markCompletedOnce(){
   const EDGE_PAD = 28;
   const MAX_TRIES = 5000;
 
-  // Gaze thresholds / margins
-  const GAZE_MARGIN_PX = 55;
-  const MIN_CALIB_SAMPLES = 10;
-  const MAX_CALIB_SAMPLES = 120;
-  const GAZE_SMOOTH_ALPHA = 0.35;
-  const OFFSCREEN_DWELL_MS = 180;
-  const ONSCREEN_DWELL_MS = 120;
-  const TRACK_LOST_GRACE_MS = 500;
-  const CALIB_RIDGE = 0.001;
-
   // Timeline sampling
   const TIMELINE_DT_MS = 100;
 
@@ -311,6 +328,11 @@ function markCompletedOnce(){
   const followupOverlay = document.getElementById('followupOverlay');
   const followupMsgEl = document.getElementById('followupMsg');
   const btnFollowup = document.getElementById('btnFollowup');
+
+  const calibOverlay = document.getElementById('calibOverlay');
+  const calibStage = document.getElementById('calibStage');
+  const calibTitle = document.getElementById('calibTitle');
+  const calibText = document.getElementById('calibText');
 
   const video = document.getElementById('video');
 
@@ -350,27 +372,25 @@ function markCompletedOnce(){
   let currentTask = null;
   let currentAttempt = null;
 
-  // Gaze tracking
-  let faceLandmarker = null;
-  let headRunning = false;
-  let lastVideoTime = -1;
-  let gazeCalibSamples = [];
-  let gazeModel = null;
-  let latestGazeFeatures = null;
-  let smoothedGaze = null;
-  let stableAttention = "WAITING";
-  let stableReason = "WAITING";
-  let pendingAttention = null;
-  let pendingReason = null;
-  let pendingSince = 0;
-  let lastGoodTrackTs = 0;
+  // Gaze tracking (WebGazer)
+  let webgazerReady = false;
+  let calibrationActive = false;
+  let pendingPid = null;
+  let latestPrediction = null;
+  let gazeListenerAttached = false;
+  const CALIB_CLICKS_PER_POINT = 3;
+  const CALIB_POINTS = [
+    {x:10,y:10},{x:50,y:10},{x:90,y:10},
+    {x:10,y:50},{x:50,y:50},{x:90,y:50},
+    {x:10,y:90},{x:50,y:90},{x:90,y:90}
+  ];
 
-  window.__HEAD_STATE__ = {
+  window.__GAZE_STATE__ = {
     tsPerf: null,
     attention: "WAITING",
     reason: "WAITING",
-    gazeX: null,
-    gazeY: null,
+    x: null,
+    y: null,
     ok: false
   };
 
@@ -676,7 +696,9 @@ function markCompletedOnce(){
     btnEarly.disabled = true;
 
     try{
-      await initHeadTracking();
+      pendingPid = pid;
+      await initGazeTracking();
+      showCalibration();
     } catch (e){
       console.error(e);
       alert("יש שגיאה בהפעלת המצלמה/מעקב המבט. פתח F12 > Console כדי לראות למה.");
@@ -684,15 +706,21 @@ function markCompletedOnce(){
       btnEarly.disabled = true;
       return;
     }
+  }
+
+  function beginTaskAfterCalibration(){
+    const pid = pendingPid;
+    if (!pid) return;
 
     sessionRunning = true;
     log.meta.pid = pid;
-    followupPid = pid; // keep PID for the form link
+    followupPid = pid;
     log.session.startedAtISO = new Date().toISOString();
     startAt = Date.now();
 
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
+    calibOverlay.style.display = 'none';
 
     btnEarly.disabled = false;
 
@@ -745,7 +773,7 @@ function markCompletedOnce(){
       { filename: `${pidSafe}_report_${ts}.csv`,       mimeType: "text/csv;charset=utf-8", content: reportCsv }
     ];
 
-    stopHeadTracking();
+    stopGazeTracking();
 
     // Show overlay immediately (no waiting)
     resetUI({ showPidOverlay: false });
@@ -798,6 +826,9 @@ function markCompletedOnce(){
     secureWarn.style.display = isSecureEnough() ? "none" : "block";
     btnEarly.disabled = true;
     btnStartInline.disabled = true;
+    if (calibOverlay) calibOverlay.style.display = 'none';
+    if (calibStage) calibStage.innerHTML = '';
+    pendingPid = null;
 
     log.meta.pid = null;
     log.session.startedAtISO = null;
@@ -810,16 +841,6 @@ function markCompletedOnce(){
     log.tasks = [];
 
     timeline.length = 0;
-    gazeCalibSamples = [];
-    gazeModel = null;
-    latestGazeFeatures = null;
-    smoothedGaze = null;
-    stableAttention = "WAITING";
-    stableReason = "WAITING";
-    pendingAttention = null;
-    pendingReason = null;
-    pendingSince = 0;
-    lastGoodTrackTs = 0;
 
     draw();
   }
@@ -1026,6 +1047,130 @@ function markCompletedOnce(){
     return "";
   }
 
+  function classifyGaze(pred){
+    if (!pred || !Number.isFinite(pred.x) || !Number.isFinite(pred.y)) {
+      return { attention: 'UNKNOWN', reason: 'NO_PREDICTION' };
+    }
+    const rect = cv.getBoundingClientRect();
+    const left = 0, top = 0, right = rect.width, bottom = rect.height;
+    if (pred.x >= left && pred.x <= right && pred.y >= top && pred.y <= bottom){
+      return { attention: 'ON_TASK', reason: 'ONSCREEN' };
+    }
+    const dxL = Math.abs(pred.x - left);
+    const dxR = Math.abs(pred.x - right);
+    const dyT = Math.abs(pred.y - top);
+    const dyB = Math.abs(pred.y - bottom);
+    const m = Math.min(dxL, dxR, dyT, dyB);
+    if (m === dxL) return { attention: 'OFF_TASK', reason: 'GAZE_LEFT' };
+    if (m === dxR) return { attention: 'OFF_TASK', reason: 'GAZE_RIGHT' };
+    if (m === dyT) return { attention: 'OFF_TASK', reason: 'GAZE_UP' };
+    return { attention: 'OFF_TASK', reason: 'GAZE_DOWN' };
+  }
+
+  function updateGazeStateFromPrediction(pred, elapsedTime){
+    latestPrediction = pred;
+    const cls = classifyGaze(pred);
+    window.__GAZE_STATE__ = {
+      tsPerf: performance.now(),
+      attention: cls.attention,
+      reason: cls.reason,
+      x: pred && Number.isFinite(pred.x) ? pred.x : null,
+      y: pred && Number.isFinite(pred.y) ? pred.y : null,
+      ok: !!(pred && Number.isFinite(pred.x) && Number.isFinite(pred.y))
+    };
+  }
+
+  async function initGazeTracking(){
+    if (!window.webgazer) throw new Error('WebGazer failed to load');
+    if (webgazerReady) return;
+
+    if (typeof window.webgazer.clearData === 'function') {
+      window.webgazer.clearData();
+    }
+
+    let wg = window.webgazer
+      .saveDataAcrossSessions(false)
+      .showVideo(false)
+      .showFaceOverlay(false)
+      .showFaceFeedbackBox(false)
+      .showPredictionPoints(false)
+      .applyKalmanFilter(true);
+
+    if (typeof wg.setTracker === 'function') {
+      try { wg = wg.setTracker('TFFacemesh'); } catch {}
+    }
+    if (typeof wg.setRegression === 'function') {
+      try { wg = wg.setRegression('weightedRidge'); } catch {}
+    }
+
+    wg.setGazeListener((data, elapsedTime) => {
+      updateGazeStateFromPrediction(data, elapsedTime);
+    });
+
+    await wg.begin();
+    webgazerReady = true;
+  }
+
+  function stopGazeTracking(){
+    try {
+      if (window.webgazer) window.webgazer.end();
+    } catch {}
+    webgazerReady = false;
+    latestPrediction = null;
+    window.__GAZE_STATE__ = {
+      tsPerf: null,
+      attention: 'WAITING',
+      reason: 'WAITING',
+      x: null, y: null, ok: false
+    };
+  }
+
+  function renderCalibrationPoint(idx, clicksDone){
+    const p = CALIB_POINTS[idx];
+    calibStage.innerHTML = '';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'calib-point';
+    btn.style.left = p.x + '%';
+    btn.style.top = p.y + '%';
+    calibStage.appendChild(btn);
+    calibTitle.textContent = 'כיול מבט קצר';
+    calibText.textContent = `הסתכלו על הנקודה ולחצו עליה ${CALIB_CLICKS_PER_POINT} פעמים. נקודה ${idx+1} מתוך ${CALIB_POINTS.length}.`;
+    return btn;
+  }
+
+  function showCalibration(){
+    calibrationActive = true;
+    pidOverlay.style.display = 'none';
+    followupOverlay.style.display = 'none';
+    taskOverlay.style.display = 'none';
+    calibOverlay.style.display = 'flex';
+
+    let idx = 0;
+    let clicks = 0;
+    let btn = renderCalibrationPoint(idx, clicks);
+
+    const handle = (e) => {
+      e.preventDefault();
+      clicks += 1;
+      btn.style.transform = 'translate(-50%,-50%) scale(' + (1 + 0.08*clicks) + ')';
+      if (clicks >= CALIB_CLICKS_PER_POINT){
+        idx += 1;
+        clicks = 0;
+        if (idx >= CALIB_POINTS.length){
+          calibrationActive = false;
+          calibStage.removeEventListener('click', handle, true);
+          calibStage.innerHTML = '';
+          beginTaskAfterCalibration();
+          return;
+        }
+        btn = renderCalibrationPoint(idx, clicks);
+      }
+    };
+
+    calibStage.addEventListener('click', handle, true);
+  }
+
   function startTimelineSampling(){
     if (timelineTimer) clearInterval(timelineTimer);
     timelineTimer = setInterval(() => {
@@ -1038,7 +1183,7 @@ function markCompletedOnce(){
         ? (now - currentTask.startedAtMs)
         : null;
 
-      const h = window.__HEAD_STATE__ || {};
+      const h = window.__GAZE_STATE__ || {};
       const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
                   : (h.attention === "OFF_TASK") ? "OFFSCREEN"
                   : "UNKNOWN";
@@ -1064,261 +1209,6 @@ function markCompletedOnce(){
       clearInterval(timelineTimer);
       timelineTimer = null;
     }
-  }
-
-  // ---- Gaze tracking (MediaPipe Face Landmarks + implicit calibration from task clicks)
-  function avgPoint(points){
-    const n = points.length || 1;
-    let x = 0, y = 0;
-    for (const p of points){ x += p.x; y += p.y; }
-    return { x: x / n, y: y / n };
-  }
-
-  function eyeFeaturesFromLandmarks(lm){
-    if (!lm || lm.length < 478) return null;
-
-    const LEFT_IRIS = [468,469,470,471,472];
-    const RIGHT_IRIS = [473,474,475,476,477];
-
-    const li = avgPoint(LEFT_IRIS.map(i => lm[i]));
-    const ri = avgPoint(RIGHT_IRIS.map(i => lm[i]));
-
-    const lOuter = lm[33],  lInner = lm[133], lTop = lm[159], lBot = lm[145];
-    const rInner = lm[362], rOuter = lm[263], rTop = lm[386], rBot = lm[374];
-
-    const lW = Math.max(1e-6, Math.abs(lInner.x - lOuter.x));
-    const rW = Math.max(1e-6, Math.abs(rOuter.x - rInner.x));
-    const lH = Math.max(1e-6, Math.abs(lBot.y - lTop.y));
-    const rH = Math.max(1e-6, Math.abs(rBot.y - rTop.y));
-
-    const leftX = (li.x - lOuter.x) / lW;
-    const rightX = (ri.x - rInner.x) / rW;
-    const leftY = (li.y - lTop.y) / lH;
-    const rightY = (ri.y - rTop.y) / rH;
-
-    const fx = (leftX + rightX) / 2;
-    const fy = (leftY + rightY) / 2;
-    const eyeSep = Math.max(1e-6, Math.abs(ri.x - li.x));
-    const faceCx = (lm[1].x + lm[168].x) / 2;
-    const blinkL = lH / lW;
-    const blinkR = rH / rW;
-    const blink = (blinkL + blinkR) / 2;
-
-    return {
-      fx, fy,
-      ldx: leftX, rdx: rightX,
-      ldy: leftY, rdy: rightY,
-      eyeSep,
-      faceCx,
-      blink,
-      leftWidth: lW,
-      rightWidth: rW
-    };
-  }
-
-  function featureVector(f){
-    return [f.fx, f.fy, f.faceCx, f.eyeSep, f.fx * f.fy, 1];
-  }
-
-  function isFeatureStable(f){
-    if (!f) return false;
-    if (!Number.isFinite(f.fx) || !Number.isFinite(f.fy)) return false;
-    if (f.fx < -0.2 || f.fx > 1.2 || f.fy < -0.2 || f.fy > 1.2) return false;
-    if (!Number.isFinite(f.blink) || f.blink < 0.10) return false;
-    if (!Number.isFinite(f.eyeSep) || f.eyeSep < 0.01) return false;
-    return true;
-  }
-
-  function solveLinearSystem(A, b){
-    const n = A.length;
-    const m = A.map((row, i) => [...row, b[i]]);
-    for (let i=0;i<n;i++){
-      let pivot = i;
-      for (let r=i+1;r<n;r++) if (Math.abs(m[r][i]) > Math.abs(m[pivot][i])) pivot = r;
-      if (Math.abs(m[pivot][i]) < 1e-9) return null;
-      if (pivot !== i) [m[i], m[pivot]] = [m[pivot], m[i]];
-      const div = m[i][i];
-      for (let c=i;c<=n;c++) m[i][c] /= div;
-      for (let r=0;r<n;r++) {
-        if (r === i) continue;
-        const f = m[r][i];
-        for (let c=i;c<=n;c++) m[r][c] -= f * m[i][c];
-      }
-    }
-    return m.map(row => row[n]);
-  }
-
-  function fitAffineModel(samples){
-    if (!samples || samples.length < MIN_CALIB_SAMPLES) return null;
-    const dim = 6;
-    const A = Array.from({length: dim}, () => Array(dim).fill(0));
-    const bx = Array(dim).fill(0);
-    const by = Array(dim).fill(0);
-
-    for (const s of samples){
-      const v = featureVector(s);
-      for (let i=0;i<dim;i++){
-        bx[i] += v[i] * s.x;
-        by[i] += v[i] * s.y;
-        for (let j=0;j<dim;j++) A[i][j] += v[i] * v[j];
-      }
-    }
-
-    for (let i=0;i<dim;i++) A[i][i] += CALIB_RIDGE;
-
-    const wx = solveLinearSystem(A, bx);
-    const wy = solveLinearSystem(A, by);
-    if (!wx || !wy) return null;
-    return { wx, wy };
-  }
-
-  function predictGaze(features){
-    if (!gazeModel || !features || !isFeatureStable(features)) return null;
-    const v = featureVector(features);
-    let x = 0, y = 0;
-    for (let i=0;i<v.length;i++){
-      x += gazeModel.wx[i] * v[i];
-      y += gazeModel.wy[i] * v[i];
-    }
-    return { x, y };
-  }
-
-  function smoothGaze(g){
-    if (!g) return smoothedGaze;
-    if (!smoothedGaze) {
-      smoothedGaze = { x: g.x, y: g.y };
-      return smoothedGaze;
-    }
-    smoothedGaze = {
-      x: smoothedGaze.x + GAZE_SMOOTH_ALPHA * (g.x - smoothedGaze.x),
-      y: smoothedGaze.y + GAZE_SMOOTH_ALPHA * (g.y - smoothedGaze.y)
-    };
-    return smoothedGaze;
-  }
-
-  function rawDecisionFromGaze(g){
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    if (!g || !Number.isFinite(g.x) || !Number.isFinite(g.y)) return { attention: "WAITING", reason: "UNCALIBRATED" };
-    if (g.x < -GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_LEFT" };
-    if (g.x > w + GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_RIGHT" };
-    if (g.y < -GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_UP" };
-    if (g.y > h + GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_DOWN" };
-    return { attention: "ON_TASK", reason: "CENTER" };
-  }
-
-  async function loadVisionModule(){
-    const candidates = [
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs",
-      "https://unpkg.com/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs",
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12",
-      "https://unpkg.com/@mediapipe/tasks-vision@0.10.12"
-    ];
-    let lastErr = null;
-    for (const url of candidates){
-      try{
-        const mod = await import(url);
-        return mod;
-      } catch(e){
-        lastErr = e;
-      }
-    }
-    throw lastErr ?? new Error("Failed to import tasks-vision");
-  }
-
-  async function initHeadTracking(){
-    const vision = await loadVisionModule();
-    const { FaceLandmarker, FilesetResolver } = vision;
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" },
-      audio: false
-    });
-
-    video.srcObject = stream;
-
-    await video.play().catch(()=>{});
-    await new Promise(res => {
-      if (video.readyState >= 2) return res();
-      video.onloadedmetadata = () => res();
-    });
-
-    const fileset = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm"
-    );
-
-    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      numFaces: 1,
-      outputFaceBlendshapes: false,
-      outputFacialTransformationMatrixes: false
-    });
-
-    headRunning = true;
-    lastVideoTime = -1;
-    requestAnimationFrame(headLoop);
-  }
-
-  function stopHeadTracking(){
-    headRunning = false;
-    try{
-      if (video && video.srcObject){
-        const tracks = video.srcObject.getTracks();
-        tracks.forEach(t => t.stop());
-      }
-      video.srcObject = null;
-    } catch {}
-    faceLandmarker = null;
-    latestGazeFeatures = null;
-  }
-
-  function headLoop(){
-    if (!headRunning) return;
-
-    if (video.readyState >= 2) {
-      const now = performance.now();
-      if (video.currentTime !== lastVideoTime) {
-        lastVideoTime = video.currentTime;
-
-        const res = faceLandmarker.detectForVideo(video, now);
-
-        if (res?.faceLandmarks?.length) {
-          const features = eyeFeaturesFromLandmarks(res.faceLandmarks[0]);
-          const featuresOk = isFeatureStable(features);
-          latestGazeFeatures = featuresOk ? features : null;
-
-          const rawGaze = featuresOk ? predictGaze(features) : null;
-          const gaze = rawGaze ? smoothGaze(rawGaze) : smoothedGaze;
-          const rawDecision = rawDecisionFromGaze(gaze);
-          const stable = updateStableAttention(rawDecision, now, !!rawGaze);
-
-          window.__HEAD_STATE__ = {
-            tsPerf: now,
-            attention: stable.attention,
-            reason: stable.reason,
-            gazeX: gaze ? gaze.x : null,
-            gazeY: gaze ? gaze.y : null,
-            ok: !!rawGaze
-          };
-        } else {
-          latestGazeFeatures = null;
-          const stable = updateStableAttention(null, now, false);
-          window.__HEAD_STATE__ = {
-            tsPerf: now,
-            attention: stable.attention,
-            reason: stable.reason,
-            gazeX: smoothedGaze ? smoothedGaze.x : null,
-            gazeY: smoothedGaze ? smoothedGaze.y : null,
-            ok: false
-          };
-        }
-      }
-    }
-    requestAnimationFrame(headLoop);
   }
 
   // ---- Input + buttons
@@ -1387,24 +1277,6 @@ function markCompletedOnce(){
         hitDotIndex: (hit === null ? null : hit),
         action: null
       });
-    }
-
-    const expectedNext = connections.length;
-    const isExpectedCorrectDot = (hit !== null && hit === expectedNext);
-
-    if (latestGazeFeatures && isExpectedCorrectDot){
-      const target = dots[hit];
-      gazeCalibSamples.push({
-        fx: latestGazeFeatures.fx,
-        fy: latestGazeFeatures.fy,
-        faceCx: latestGazeFeatures.faceCx,
-        eyeSep: latestGazeFeatures.eyeSep,
-        x: target.x,
-        y: target.y
-      });
-      if (gazeCalibSamples.length > MAX_CALIB_SAMPLES) gazeCalibSamples = gazeCalibSamples.slice(-MAX_CALIB_SAMPLES);
-      const fitted = fitAffineModel(gazeCalibSamples);
-      if (fitted) gazeModel = fitted;
     }
 
     if (hit === null){
