@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Gaze Tracking (Calibrated)</title>
+  <title>Connect-the-Dots + Iris Gaze Tracking (Calibrated/Fix)</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -286,7 +286,6 @@
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
-<script src="https://webgazer.cs.brown.edu/webgazer.js" defer></script>
 
 <script type="module">
 (() => {
@@ -328,6 +327,8 @@ function markCompletedOnce(){
   const PREDICTION_STALE_MS = 800;
   const MIN_GAZE_CLICK_CALIBRATION = 5;
   const CALIBRATION_REPEATS = 2;
+  const FEATURE_HISTORY_MAX = 8;
+  const REGRESSION_LAMBDA = 0.001;
   const CALIBRATION_POINTS = [
     { x: 0.5, y: 0.5 },
     { x: 0.12, y: 0.18 },
@@ -409,13 +410,19 @@ function markCompletedOnce(){
   let currentAttempt = null;
 
   // Gaze tracking
+  let faceLandmarker = null;
   let gazeRunning = false;
   let gazeCalibrationClicks = 0;
   let lastGazePredictionAt = 0;
   let lastGazeData = null;
+  let lastFeatureVector = null;
+  let featureHistory = [];
+  let regressionModel = null;
+  let calibrationSamples = [];
   let calibrationActive = false;
   let calibrationQueue = [];
   let calibrationStepIndex = -1;
+  let lastVideoTime = -1;
 
   window.__TRACK_STATE__ = {
     tsPerf: null,
@@ -756,6 +763,14 @@ function markCompletedOnce(){
     calibrationQueue = [];
     calibrationStepIndex = -1;
 
+    regressionModel = fitRegressionModel(calibrationSamples);
+    if (!regressionModel){
+      alert('הכיול לא הצליח. נסו לרענן את הדף ולהתחיל מחדש בתאורה טובה יותר.');
+      resetUI();
+      stopGazeTracking();
+      return;
+    }
+
     sessionRunning = true;
     btnEarly.disabled = false;
     startTimelineSampling();
@@ -879,6 +894,10 @@ function markCompletedOnce(){
   function resetUI({ showPidOverlay = true } = {}){
     sessionRunning = false;
     taskActive = false;
+    calibrationActive = false;
+    calibrationQueue = [];
+    calibrationStepIndex = -1;
+    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
     taskIndex = 0;
     dots = [];
     connections = [];
@@ -1154,7 +1173,7 @@ function markCompletedOnce(){
     }
   }
 
-  // ---- Gaze tracking (WebGazer)
+  // ---- Gaze tracking (iris landmarks + calibration)
   function getViewportBounds(){
     return {
       left: 0,
@@ -1173,7 +1192,7 @@ function markCompletedOnce(){
       return { attention: "WAITING", reason: "STALE_PREDICTION" };
     }
 
-    if (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) {
+    if (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION || !regressionModel) {
       return { attention: "WAITING", reason: "CALIBRATING" };
     }
 
@@ -1189,15 +1208,166 @@ function markCompletedOnce(){
     return { attention: "ON_TASK", reason: "ONSCREEN" };
   }
 
-  async function initGazeTracking(){
-    if (!("webgazer" in window)) {
-      throw new Error("WebGazer library was not loaded.");
+  async function loadVisionModule(){
+    const candidates = [
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs",
+      "https://unpkg.com/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs",
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12",
+      "https://unpkg.com/@mediapipe/tasks-vision@0.10.12"
+    ];
+    let lastErr = null;
+    for (const url of candidates){
+      try{
+        const mod = await import(url);
+        return mod;
+      } catch(e){
+        lastErr = e;
+      }
     }
+    throw lastErr ?? new Error("Failed to import tasks-vision");
+  }
+
+  function safeNorm(v, lo, hi){
+    const span = Math.max(1e-6, hi - lo);
+    return (v - lo) / span;
+  }
+
+  function avgPoint(points){
+    const s = points.reduce((acc,p) => ({ x: acc.x + p.x, y: acc.y + p.y }), {x:0,y:0});
+    return { x: s.x / points.length, y: s.y / points.length };
+  }
+
+  function extractEyeFeatures(landmarks){
+    if (!Array.isArray(landmarks) || landmarks.length < 478) return null;
+
+    const p33 = landmarks[33], p133 = landmarks[133], p159 = landmarks[159], p145 = landmarks[145], irisL = landmarks[468];
+    const p263 = landmarks[263], p362 = landmarks[362], p386 = landmarks[386], p374 = landmarks[374], irisR = landmarks[473];
+    const nose = landmarks[1] || landmarks[4] || avgPoint([p33, p263]);
+    const faceL = landmarks[234] || p33;
+    const faceR = landmarks[454] || p263;
+
+    const leftX = safeNorm(irisL.x, Math.min(p33.x, p133.x), Math.max(p33.x, p133.x));
+    const rightX = safeNorm(irisR.x, Math.min(p263.x, p362.x), Math.max(p263.x, p362.x));
+    const leftY = safeNorm(irisL.y, Math.min(p159.y, p145.y), Math.max(p159.y, p145.y));
+    const rightY = safeNorm(irisR.y, Math.min(p386.y, p374.y), Math.max(p386.y, p374.y));
+
+    const eyeMid = avgPoint([p33, p133, p263, p362]);
+    const interEye = Math.hypot(irisL.x - irisR.x, irisL.y - irisR.y);
+    const faceW = Math.hypot(faceL.x - faceR.x, faceL.y - faceR.y);
+
+    return [
+      1,
+      leftX, rightX,
+      leftY, rightY,
+      eyeMid.x, eyeMid.y,
+      nose.x, nose.y,
+      interEye,
+      faceW
+    ];
+  }
+
+  function averageFeatureVectors(vectors){
+    if (!vectors.length) return null;
+    const dim = vectors[0].length;
+    const out = new Array(dim).fill(0);
+    for (const v of vectors){
+      for (let i=0;i<dim;i++) out[i] += v[i];
+    }
+    for (let i=0;i<dim;i++) out[i] /= vectors.length;
+    return out;
+  }
+
+  function getCurrentAveragedFeatures(){
+    const recent = featureHistory.slice(-FEATURE_HISTORY_MAX).map(item => item.features).filter(Boolean);
+    if (!recent.length) return null;
+    return averageFeatureVectors(recent);
+  }
+
+  function solveLinearSystem(A, b){
+    const n = A.length;
+    const M = A.map((row,i) => row.slice().concat([b[i]]));
+
+    for (let col=0; col<n; col++){
+      let pivot = col;
+      for (let row=col+1; row<n; row++){
+        if (Math.abs(M[row][col]) > Math.abs(M[pivot][col])) pivot = row;
+      }
+      if (Math.abs(M[pivot][col]) < 1e-12) return null;
+      if (pivot !== col){ const tmp = M[col]; M[col] = M[pivot]; M[pivot] = tmp; }
+
+      const div = M[col][col];
+      for (let j=col; j<=n; j++) M[col][j] /= div;
+
+      for (let row=0; row<n; row++){
+        if (row === col) continue;
+        const factor = M[row][col];
+        if (!factor) continue;
+        for (let j=col; j<=n; j++) M[row][j] -= factor * M[col][j];
+      }
+    }
+    return M.map(row => row[n]);
+  }
+
+  function fitRidge(X, y, lambda = REGRESSION_LAMBDA){
+    if (!X.length || X.length !== y.length) return null;
+    const p = X[0].length;
+    const XtX = Array.from({length:p}, () => new Array(p).fill(0));
+    const Xty = new Array(p).fill(0);
+
+    for (let i=0;i<X.length;i++){
+      const xi = X[i];
+      for (let r=0;r<p;r++){
+        Xty[r] += xi[r] * y[i];
+        for (let c=0;c<p;c++) XtX[r][c] += xi[r] * xi[c];
+      }
+    }
+    for (let i=0;i<p;i++) XtX[i][i] += lambda;
+    return solveLinearSystem(XtX, Xty);
+  }
+
+  function fitRegressionModel(samples){
+    if (!samples || samples.length < Math.max(MIN_GAZE_CLICK_CALIBRATION, 6)) return null;
+    const X = samples.map(s => s.features);
+    const yx = samples.map(s => s.screenX);
+    const yy = samples.map(s => s.screenY);
+    const wx = fitRidge(X, yx);
+    const wy = fitRidge(X, yy);
+    if (!wx || !wy) return null;
+    return { wx, wy };
+  }
+
+  function predictFromFeatures(features){
+    if (!regressionModel || !features) return null;
+    const x = regressionModel.wx.reduce((acc,w,i) => acc + w * features[i], 0);
+    const y = regressionModel.wy.reduce((acc,w,i) => acc + w * features[i], 0);
+    return { x, y };
+  }
+
+  function recordCalibrationSample(screenX, screenY){
+    const features = getCurrentAveragedFeatures();
+    if (!features) return false;
+    calibrationSamples.push({ features, screenX, screenY, ts: Date.now() });
+    gazeCalibrationClicks += 1;
+    if (regressionModel) {
+      const updated = fitRegressionModel(calibrationSamples);
+      if (updated) regressionModel = updated;
+    }
+    return true;
+  }
+
+  async function initGazeTracking(){
+    const vision = await loadVisionModule();
+    const { FaceLandmarker, FilesetResolver } = vision;
 
     gazeRunning = true;
     gazeCalibrationClicks = 0;
     lastGazePredictionAt = 0;
     lastGazeData = null;
+    lastFeatureVector = null;
+    featureHistory = [];
+    regressionModel = null;
+    calibrationSamples = [];
+    lastVideoTime = -1;
 
     window.__TRACK_STATE__ = {
       tsPerf: performance.now(),
@@ -1208,59 +1378,57 @@ function markCompletedOnce(){
       ok: false
     };
 
-    window.webgazer
-      .setRegression("ridge")
-      .showVideoPreview(false)
-      .showPredictionPoints(false)
-      .showFaceOverlay(false)
-      .showFaceFeedbackBox(false)
-      .saveDataAcrossSessions(false)
-      .applyKalmanFilter(true)
-      .setGazeListener((data, elapsedTime) => {
-        if (!gazeRunning) return;
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: "user" },
+      audio: false
+    });
 
-        if (!data || typeof data.x !== "number" || typeof data.y !== "number") {
-          window.__TRACK_STATE__ = {
-            tsPerf: performance.now(),
-            attention: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "WAITING" : "TRACK_LOST",
-            reason: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "CALIBRATING" : "TRACK_LOST",
-            gazeX: null,
-            gazeY: null,
-            ok: false
-          };
-          return;
-        }
+    video.srcObject = stream;
+    await video.play().catch(()=>{});
+    await new Promise(res => {
+      if (video.readyState >= 2) return res();
+      video.onloadedmetadata = () => res();
+    });
 
-        lastGazePredictionAt = Date.now();
-        lastGazeData = { x: data.x, y: data.y, elapsedTime: elapsedTime ?? null };
+    const fileset = await FilesetResolver.forVisionTasks(
+      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm"
+    );
 
-        const { attention, reason } = decideFromGaze(lastGazeData);
+    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: {
+        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+        delegate: "GPU"
+      },
+      runningMode: "VIDEO",
+      numFaces: 1,
+      outputFacialTransformationMatrixes: false
+    });
 
-        window.__TRACK_STATE__ = {
-          tsPerf: performance.now(),
-          attention,
-          reason,
-          gazeX: data.x,
-          gazeY: data.y,
-          ok: attention !== "TRACK_LOST" && attention !== "WAITING"
-        };
-      });
-
-    await window.webgazer.begin();
+    requestAnimationFrame(gazeLoop);
   }
 
   function stopGazeTracking(){
     gazeRunning = false;
-    try {
-      if (window.webgazer) {
-        window.webgazer.clearGazeListener();
-        window.webgazer.end();
+    try{
+      if (video && video.srcObject){
+        const tracks = video.srcObject.getTracks();
+        tracks.forEach(t => t.stop());
       }
+      video.srcObject = null;
     } catch {}
+    try {
+      if (faceLandmarker && typeof faceLandmarker.close === 'function') faceLandmarker.close();
+    } catch {}
+    faceLandmarker = null;
 
     lastGazePredictionAt = 0;
     lastGazeData = null;
+    lastFeatureVector = null;
     gazeCalibrationClicks = 0;
+    featureHistory = [];
+    regressionModel = null;
+    calibrationSamples = [];
+    lastVideoTime = -1;
 
     window.__TRACK_STATE__ = {
       tsPerf: performance.now(),
@@ -1270,6 +1438,60 @@ function markCompletedOnce(){
       gazeY: null,
       ok: false
     };
+  }
+
+  function gazeLoop(){
+    if (!gazeRunning || !faceLandmarker) return;
+
+    if (video.readyState >= 2 && video.currentTime !== lastVideoTime){
+      lastVideoTime = video.currentTime;
+      const nowPerf = performance.now();
+      const res = faceLandmarker.detectForVideo(video, nowPerf);
+      const landmarks = res?.faceLandmarks?.[0];
+
+      if (landmarks && landmarks.length >= 478){
+        const features = extractEyeFeatures(landmarks);
+        if (features){
+          lastFeatureVector = features;
+          featureHistory.push({ ts: Date.now(), features });
+          if (featureHistory.length > FEATURE_HISTORY_MAX) featureHistory.shift();
+
+          const pred = predictFromFeatures(features);
+          if (pred){
+            lastGazePredictionAt = Date.now();
+            lastGazeData = pred;
+            const { attention, reason } = decideFromGaze(pred);
+            window.__TRACK_STATE__ = {
+              tsPerf: nowPerf,
+              attention,
+              reason,
+              gazeX: pred.x,
+              gazeY: pred.y,
+              ok: attention === "ON_TASK" || attention === "OFF_TASK"
+            };
+          } else {
+            window.__TRACK_STATE__ = {
+              tsPerf: nowPerf,
+              attention: "WAITING",
+              reason: "CALIBRATING",
+              gazeX: null,
+              gazeY: null,
+              ok: false
+            };
+          }
+        }
+      } else {
+        window.__TRACK_STATE__ = {
+          tsPerf: nowPerf,
+          attention: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "WAITING" : "TRACK_LOST",
+          reason: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "CALIBRATING" : "TRACK_LOST",
+          gazeX: null,
+          gazeY: null,
+          ok: false
+        };
+      }
+    }
+    requestAnimationFrame(gazeLoop);
   }
 
   // ---- Input + buttons
@@ -1327,18 +1549,16 @@ function markCompletedOnce(){
   if (calibrationDot){
     calibrationDot.addEventListener('click', (e) => {
       e.preventDefault();
-      if (!calibrationActive || !window.webgazer) return;
+      if (!calibrationActive) return;
 
       const rect = calibrationDot.getBoundingClientRect();
       const x = rect.left + rect.width / 2;
       const y = rect.top + rect.height / 2;
 
-      gazeCalibrationClicks += 1;
-      try {
-        if (typeof window.webgazer.recordScreenPosition === 'function') {
-          window.webgazer.recordScreenPosition(x, y, 'click');
-        }
-      } catch {}
+      if (!recordCalibrationSample(x, y)) {
+        alert('לא זוהו עיניים בצורה יציבה. נסו לשבת מול המצלמה ולהביט בנקודה שוב.');
+        return;
+      }
 
       advanceCalibrationStep();
     });
@@ -1349,11 +1569,14 @@ function markCompletedOnce(){
     if (!sessionRunning || !taskActive) return;
     e.preventDefault();
 
-    if (gazeRunning && window.webgazer && !calibrationActive) {
-      gazeCalibrationClicks += 1;
+    const pos = getPointerPos(e);
+
+    if (gazeRunning && !calibrationActive) {
+      const clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
+      const clientY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
+      recordCalibrationSample(clientX, clientY);
     }
 
-    const pos = getPointerPos(e);
     const hit = pickDotAt(pos);
 
     if (currentAttempt){
