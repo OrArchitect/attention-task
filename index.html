@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Iris Gaze Tracking (Calibrated/Fix)</title>
+  <title>Connect-the-Dots + Gaze Tracking (Clean)</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -170,45 +170,6 @@
       align-items:center;
     }
 
-    .calibrationStage{
-      position:fixed;
-      inset:0;
-      z-index: 9;
-      display:none;
-      align-items:center;
-      justify-content:center;
-      background: rgba(0,0,0,.42);
-      backdrop-filter: blur(4px);
-    }
-    .calibrationCard{
-      position:absolute;
-      top:20px;
-      left:50%;
-      transform:translateX(-50%);
-      width:min(640px, calc(100% - 24px));
-      background: rgba(15,26,46,.92);
-      border:1px solid rgba(255,255,255,.10);
-      border-radius:22px;
-      box-shadow: var(--shadow);
-      padding:16px 18px;
-      text-align:center;
-    }
-    .calibrationCard h3{margin:0 0 8px; font-size:18px;}
-    .calibrationCard p{margin:0; color:var(--muted); line-height:1.45; font-size:14px;}
-    .calibrationProgress{margin-top:8px; color:rgba(230,234,242,.82); font-size:13px;}
-    .calibrationDot{
-      position:absolute;
-      width:24px;
-      height:24px;
-      border-radius:999px;
-      border:2px solid rgba(255,255,255,.88);
-      background: rgba(120,170,255,.96);
-      box-shadow: 0 0 0 8px rgba(120,170,255,.18);
-      transform: translate(-50%, -50%);
-      cursor:pointer;
-    }
-    .calibrationDot:active{transform: translate(-50%, -50%) scale(.96);}
-
   </style>
 </head>
 
@@ -253,17 +214,6 @@
     <canvas id="cv"></canvas>
   </div>
 
-
-  <div id="calibrationStage" class="calibrationStage" aria-hidden="true">
-    <div class="calibrationCard">
-      <h3>כיול קצר של המצלמה</h3>
-      <p>לחצו על הנקודה הכחולה שמופיעה על המסך. הנקודה תעבור בין כמה מיקומים קבועים.
-      השתדלו לשבת יציב, להביט ישירות בנקודה, וללחוץ רק לאחר שהתמקדתם בה.</p>
-      <div id="calibrationProgress" class="calibrationProgress">מכין כיול…</div>
-    </div>
-    <button id="calibrationDot" class="calibrationDot" type="button" aria-label="נקודת כיול"></button>
-  </div>
-
   <div id="taskOverlay" class="overlay" role="dialog" aria-modal="true">
     <div class="card">
       <h2>מעולה 🎉</h2>
@@ -285,7 +235,6 @@
   </div>
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
-
 
 <script type="module">
 (() => {
@@ -322,20 +271,9 @@ function markCompletedOnce(){
   const EDGE_PAD = 28;
   const MAX_TRIES = 5000;
 
-  // Gaze tracking thresholds / config
-  const EDGE_TOLERANCE_PX = 24;
-  const PREDICTION_STALE_MS = 800;
-  const MIN_GAZE_CLICK_CALIBRATION = 5;
-  const CALIBRATION_REPEATS = 2;
-  const FEATURE_HISTORY_MAX = 8;
-  const REGRESSION_LAMBDA = 0.001;
-  const CALIBRATION_POINTS = [
-    { x: 0.5, y: 0.5 },
-    { x: 0.12, y: 0.18 },
-    { x: 0.88, y: 0.18 },
-    { x: 0.12, y: 0.82 },
-    { x: 0.88, y: 0.82 }
-  ];
+  // Gaze thresholds / margins
+  const GAZE_MARGIN_PX = 70;
+  const MIN_CALIB_SAMPLES = 8;
 
   // Timeline sampling
   const TIMELINE_DT_MS = 100;
@@ -369,9 +307,6 @@ function markCompletedOnce(){
   const btnFollowup = document.getElementById('btnFollowup');
 
   const video = document.getElementById('video');
-  const calibrationStage = document.getElementById('calibrationStage');
-  const calibrationDot = document.getElementById('calibrationDot');
-  const calibrationProgress = document.getElementById('calibrationProgress');
 
   // ---- State
   let sessionRunning = false;
@@ -411,20 +346,13 @@ function markCompletedOnce(){
 
   // Gaze tracking
   let faceLandmarker = null;
-  let gazeRunning = false;
-  let gazeCalibrationClicks = 0;
-  let lastGazePredictionAt = 0;
-  let lastGazeData = null;
-  let lastFeatureVector = null;
-  let featureHistory = [];
-  let regressionModel = null;
-  let calibrationSamples = [];
-  let calibrationActive = false;
-  let calibrationQueue = [];
-  let calibrationStepIndex = -1;
+  let headRunning = false;
   let lastVideoTime = -1;
+  let gazeCalibSamples = [];
+  let gazeModel = null;
+  let latestGazeFeatures = null;
 
-  window.__TRACK_STATE__ = {
+  window.__HEAD_STATE__ = {
     tsPerf: null,
     attention: "WAITING",
     reason: "WAITING",
@@ -679,7 +607,6 @@ function markCompletedOnce(){
 
     if (ok){
       endAttempt(true, 'completed_correct');
-      console.log('Task completed correctly');
       completeTask();
     } else {
       endAttempt(false, 'completed_wrong');
@@ -714,73 +641,16 @@ function markCompletedOnce(){
 
   function showContinueOverlay(){
     taskActive = false;
-    if (followupOverlay) followupOverlay.style.display = 'none';
-    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
     taskOverlay.style.display = 'flex';
-    taskOverlay.setAttribute('aria-hidden', 'false');
   }
 
-  function buildCalibrationQueue(){
-    const q = [];
-    for (let r = 0; r < CALIBRATION_REPEATS; r++){
-      for (const pt of CALIBRATION_POINTS) q.push(pt);
-    }
-    return q;
-  }
+  function completeTask(){
+    currentTask.endedAtMs = Date.now();
+    currentTask.durationMs = currentTask.endedAtMs - currentTask.startedAtMs;
+    currentTask.completed = true;
 
-  function placeCalibrationDot(pt){
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    calibrationDot.style.left = `${Math.round(pt.x * w)}px`;
-    calibrationDot.style.top = `${Math.round(pt.y * h)}px`;
-  }
-
-  function updateCalibrationProgress(){
-    const total = calibrationQueue.length;
-    const current = Math.min(calibrationStepIndex + 1, total);
-    calibrationProgress.textContent = `שלב ${current} מתוך ${total}`;
-  }
-
-  function advanceCalibrationStep(){
-    calibrationStepIndex += 1;
-    if (calibrationStepIndex >= calibrationQueue.length){
-      finishCalibration();
-      return;
-    }
-    updateCalibrationProgress();
-    placeCalibrationDot(calibrationQueue[calibrationStepIndex]);
-  }
-
-  function beginCalibration(){
-    calibrationQueue = buildCalibrationQueue();
-    calibrationStepIndex = -1;
-    calibrationActive = true;
-    calibrationStage.style.display = 'flex';
-    calibrationStage.setAttribute('aria-hidden', 'false');
-    advanceCalibrationStep();
-  }
-
-  function finishCalibration(){
-    calibrationActive = false;
-    calibrationStage.style.display = 'none';
-    calibrationStage.setAttribute('aria-hidden', 'true');
-    calibrationQueue = [];
-    calibrationStepIndex = -1;
-
-    regressionModel = fitRegressionModel(calibrationSamples);
-    if (!regressionModel){
-      alert('הכיול לא הצליח. נסו לרענן את הדף ולהתחיל מחדש בתאורה טובה יותר.');
-      resetUI();
-      stopGazeTracking();
-      return;
-    }
-
-    sessionRunning = true;
-    btnEarly.disabled = false;
-    startTimelineSampling();
-    startNewTask();
-    cancelAnimationFrame(rafId);
-    loop();
+    log.session.totalTasksCompleted += 1;
+    showContinueOverlay();
   }
 
   async function startSession(pid){
@@ -793,15 +663,16 @@ function markCompletedOnce(){
     btnEarly.disabled = true;
 
     try{
-      await initGazeTracking();
+      await initHeadTracking();
     } catch (e){
       console.error(e);
-      alert("יש שגיאה בהפעלת המצלמה/מודל. פתח F12 > Console כדי לראות למה.");
+      alert("יש שגיאה בהפעלת המצלמה/מעקב המבט. פתח F12 > Console כדי לראות למה.");
       btnStartInline.disabled = false;
       btnEarly.disabled = true;
       return;
     }
 
+    sessionRunning = true;
     log.meta.pid = pid;
     followupPid = pid; // keep PID for the form link
     log.session.startedAtISO = new Date().toISOString();
@@ -810,7 +681,12 @@ function markCompletedOnce(){
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
 
-    beginCalibration();
+    btnEarly.disabled = false;
+
+    startTimelineSampling();
+    startNewTask();
+    cancelAnimationFrame(rafId);
+    loop();
   }
 
   async function finish(reason){
@@ -819,8 +695,6 @@ function markCompletedOnce(){
     if (reason === 'early' || reason === 'timeout') markCompletedOnce();
     sessionRunning = false;
     taskActive = false;
-    calibrationActive = false;
-    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
     cancelAnimationFrame(rafId);
 
     stopTimelineSampling();
@@ -858,7 +732,7 @@ function markCompletedOnce(){
       { filename: `${pidSafe}_report_${ts}.csv`,       mimeType: "text/csv;charset=utf-8", content: reportCsv }
     ];
 
-    stopGazeTracking();
+    stopHeadTracking();
 
     // Show overlay immediately (no waiting)
     resetUI({ showPidOverlay: false });
@@ -898,10 +772,6 @@ function markCompletedOnce(){
   function resetUI({ showPidOverlay = true } = {}){
     sessionRunning = false;
     taskActive = false;
-    calibrationActive = false;
-    calibrationQueue = [];
-    calibrationStepIndex = -1;
-    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
     taskIndex = 0;
     dots = [];
     connections = [];
@@ -927,10 +797,6 @@ function markCompletedOnce(){
     log.tasks = [];
 
     timeline.length = 0;
-    calibrationActive = false;
-    calibrationQueue = [];
-    calibrationStepIndex = -1;
-    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
 
     draw();
   }
@@ -1149,7 +1015,7 @@ function markCompletedOnce(){
         ? (now - currentTask.startedAtMs)
         : null;
 
-      const h = window.__TRACK_STATE__ || {};
+      const h = window.__HEAD_STATE__ || {};
       const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
                   : (h.attention === "OFF_TASK") ? "OFFSCREEN"
                   : "UNKNOWN";
@@ -1177,39 +1043,106 @@ function markCompletedOnce(){
     }
   }
 
-  // ---- Gaze tracking (iris landmarks + calibration)
-  function getViewportBounds(){
+  // ---- Gaze tracking (MediaPipe Face Landmarks + implicit calibration from task clicks)
+  function avgPoint(points){
+    const n = points.length || 1;
+    let x = 0, y = 0;
+    for (const p of points){ x += p.x; y += p.y; }
+    return { x: x / n, y: y / n };
+  }
+
+  function eyeFeaturesFromLandmarks(lm){
+    if (!lm || lm.length < 478) return null;
+
+    const LEFT_IRIS = [468,469,470,471,472];
+    const RIGHT_IRIS = [473,474,475,476,477];
+
+    const li = avgPoint(LEFT_IRIS.map(i => lm[i]));
+    const ri = avgPoint(RIGHT_IRIS.map(i => lm[i]));
+
+    const lOuter = lm[33],  lInner = lm[133], lTop = lm[159], lBot = lm[145];
+    const rInner = lm[362], rOuter = lm[263], rTop = lm[386], rBot = lm[374];
+
+    const lW = Math.max(1e-6, Math.abs(lInner.x - lOuter.x));
+    const rW = Math.max(1e-6, Math.abs(rOuter.x - rInner.x));
+    const lH = Math.max(1e-6, Math.abs(lBot.y - lTop.y));
+    const rH = Math.max(1e-6, Math.abs(rBot.y - rTop.y));
+
+    const leftX = (li.x - lOuter.x) / lW;
+    const rightX = (ri.x - rInner.x) / rW;
+    const leftY = (li.y - lTop.y) / lH;
+    const rightY = (ri.y - rTop.y) / rH;
+
+    const fx = (leftX + rightX) / 2;
+    const fy = (leftY + rightY) / 2;
+    const eyeSep = Math.max(1e-6, Math.abs(ri.x - li.x));
+    const faceCx = (lm[1].x + lm[168].x) / 2;
+
     return {
-      left: 0,
-      top: 0,
-      right: window.innerWidth,
-      bottom: window.innerHeight
+      fx, fy,
+      ldx: leftX, rdx: rightX,
+      ldy: leftY, rdy: rightY,
+      eyeSep,
+      faceCx
     };
   }
 
-  function decideFromGaze(data){
-    if (!data || typeof data.x !== "number" || typeof data.y !== "number") {
-      return { attention: "WAITING", reason: "NO_PREDICTION" };
+  function solve3x3(A, b){
+    const m = [
+      [A[0][0], A[0][1], A[0][2], b[0]],
+      [A[1][0], A[1][1], A[1][2], b[1]],
+      [A[2][0], A[2][1], A[2][2], b[2]]
+    ];
+    for (let i=0;i<3;i++){
+      let pivot = i;
+      for (let r=i+1;r<3;r++) if (Math.abs(m[r][i]) > Math.abs(m[pivot][i])) pivot = r;
+      if (Math.abs(m[pivot][i]) < 1e-9) return null;
+      if (pivot !== i) [m[i], m[pivot]] = [m[pivot], m[i]];
+      const div = m[i][i];
+      for (let c=i;c<4;c++) m[i][c] /= div;
+      for (let r=0;r<3;r++){
+        if (r === i) continue;
+        const f = m[r][i];
+        for (let c=i;c<4;c++) m[r][c] -= f * m[i][c];
+      }
     }
+    return [m[0][3], m[1][3], m[2][3]];
+  }
 
-    if (Date.now() - lastGazePredictionAt > PREDICTION_STALE_MS) {
-      return { attention: "WAITING", reason: "STALE_PREDICTION" };
+  function fitAffineModel(samples){
+    if (!samples || samples.length < 3) return null;
+    let s11=0,s12=0,s13=0,s22=0,s23=0,s33=samples.length;
+    let bx1=0,bx2=0,bx3=0, by1=0,by2=0,by3=0;
+    for (const s of samples){
+      const f1 = s.fx, f2 = s.fy, f3 = 1;
+      s11 += f1*f1; s12 += f1*f2; s13 += f1;
+      s22 += f2*f2; s23 += f2;
+      bx1 += f1*s.x; bx2 += f2*s.x; bx3 += s.x;
+      by1 += f1*s.y; by2 += f2*s.y; by3 += s.y;
     }
+    const A = [[s11,s12,s13],[s12,s22,s23],[s13,s23,s33]];
+    const wx = solve3x3(A, [bx1,bx2,bx3]);
+    const wy = solve3x3(A, [by1,by2,by3]);
+    if (!wx || !wy) return null;
+    return { wx, wy };
+  }
 
-    if (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION || !regressionModel) {
-      return { attention: "WAITING", reason: "CALIBRATING" };
-    }
+  function predictGaze(features){
+    if (!gazeModel || !features) return null;
+    const x = gazeModel.wx[0]*features.fx + gazeModel.wx[1]*features.fy + gazeModel.wx[2];
+    const y = gazeModel.wy[0]*features.fx + gazeModel.wy[1]*features.fy + gazeModel.wy[2];
+    return { x, y };
+  }
 
-    const bounds = getViewportBounds();
-    const x = data.x;
-    const y = data.y;
-
-    if (x < bounds.left - EDGE_TOLERANCE_PX)  return { attention: "OFF_TASK", reason: "GAZE_LEFT"  };
-    if (x > bounds.right + EDGE_TOLERANCE_PX) return { attention: "OFF_TASK", reason: "GAZE_RIGHT" };
-    if (y < bounds.top - EDGE_TOLERANCE_PX)   return { attention: "OFF_TASK", reason: "GAZE_UP"    };
-    if (y > bounds.bottom + EDGE_TOLERANCE_PX)return { attention: "OFF_TASK", reason: "GAZE_DOWN"  };
-
-    return { attention: "ON_TASK", reason: "ONSCREEN" };
+  function decideFromGaze(g){
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    if (!g || !Number.isFinite(g.x) || !Number.isFinite(g.y)) return { attention: "WAITING", reason: "UNCALIBRATED" };
+    if (g.x < -GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_LEFT" };
+    if (g.x > w + GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_RIGHT" };
+    if (g.y < -GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_UP" };
+    if (g.y > h + GAZE_MARGIN_PX) return { attention: "OFF_TASK", reason: "GAZE_DOWN" };
+    return { attention: "ON_TASK", reason: "CENTER" };
   }
 
   async function loadVisionModule(){
@@ -1231,169 +1164,17 @@ function markCompletedOnce(){
     throw lastErr ?? new Error("Failed to import tasks-vision");
   }
 
-  function safeNorm(v, lo, hi){
-    const span = Math.max(1e-6, hi - lo);
-    return (v - lo) / span;
-  }
-
-  function avgPoint(points){
-    const s = points.reduce((acc,p) => ({ x: acc.x + p.x, y: acc.y + p.y }), {x:0,y:0});
-    return { x: s.x / points.length, y: s.y / points.length };
-  }
-
-  function extractEyeFeatures(landmarks){
-    if (!Array.isArray(landmarks) || landmarks.length < 478) return null;
-
-    const p33 = landmarks[33], p133 = landmarks[133], p159 = landmarks[159], p145 = landmarks[145], irisL = landmarks[468];
-    const p263 = landmarks[263], p362 = landmarks[362], p386 = landmarks[386], p374 = landmarks[374], irisR = landmarks[473];
-    const nose = landmarks[1] || landmarks[4] || avgPoint([p33, p263]);
-    const faceL = landmarks[234] || p33;
-    const faceR = landmarks[454] || p263;
-
-    const leftX = safeNorm(irisL.x, Math.min(p33.x, p133.x), Math.max(p33.x, p133.x));
-    const rightX = safeNorm(irisR.x, Math.min(p263.x, p362.x), Math.max(p263.x, p362.x));
-    const leftY = safeNorm(irisL.y, Math.min(p159.y, p145.y), Math.max(p159.y, p145.y));
-    const rightY = safeNorm(irisR.y, Math.min(p386.y, p374.y), Math.max(p386.y, p374.y));
-
-    const eyeMid = avgPoint([p33, p133, p263, p362]);
-    const interEye = Math.hypot(irisL.x - irisR.x, irisL.y - irisR.y);
-    const faceW = Math.hypot(faceL.x - faceR.x, faceL.y - faceR.y);
-
-    return [
-      1,
-      leftX, rightX,
-      leftY, rightY,
-      eyeMid.x, eyeMid.y,
-      nose.x, nose.y,
-      interEye,
-      faceW
-    ];
-  }
-
-  function averageFeatureVectors(vectors){
-    if (!vectors.length) return null;
-    const dim = vectors[0].length;
-    const out = new Array(dim).fill(0);
-    for (const v of vectors){
-      for (let i=0;i<dim;i++) out[i] += v[i];
-    }
-    for (let i=0;i<dim;i++) out[i] /= vectors.length;
-    return out;
-  }
-
-  function getCurrentAveragedFeatures(){
-    const recent = featureHistory.slice(-FEATURE_HISTORY_MAX).map(item => item.features).filter(Boolean);
-    if (!recent.length) return null;
-    return averageFeatureVectors(recent);
-  }
-
-  function solveLinearSystem(A, b){
-    const n = A.length;
-    const M = A.map((row,i) => row.slice().concat([b[i]]));
-
-    for (let col=0; col<n; col++){
-      let pivot = col;
-      for (let row=col+1; row<n; row++){
-        if (Math.abs(M[row][col]) > Math.abs(M[pivot][col])) pivot = row;
-      }
-      if (Math.abs(M[pivot][col]) < 1e-12) return null;
-      if (pivot !== col){ const tmp = M[col]; M[col] = M[pivot]; M[pivot] = tmp; }
-
-      const div = M[col][col];
-      for (let j=col; j<=n; j++) M[col][j] /= div;
-
-      for (let row=0; row<n; row++){
-        if (row === col) continue;
-        const factor = M[row][col];
-        if (!factor) continue;
-        for (let j=col; j<=n; j++) M[row][j] -= factor * M[col][j];
-      }
-    }
-    return M.map(row => row[n]);
-  }
-
-  function fitRidge(X, y, lambda = REGRESSION_LAMBDA){
-    if (!X.length || X.length !== y.length) return null;
-    const p = X[0].length;
-    const XtX = Array.from({length:p}, () => new Array(p).fill(0));
-    const Xty = new Array(p).fill(0);
-
-    for (let i=0;i<X.length;i++){
-      const xi = X[i];
-      for (let r=0;r<p;r++){
-        Xty[r] += xi[r] * y[i];
-        for (let c=0;c<p;c++) XtX[r][c] += xi[r] * xi[c];
-      }
-    }
-    for (let i=0;i<p;i++) XtX[i][i] += lambda;
-    return solveLinearSystem(XtX, Xty);
-  }
-
-  function fitRegressionModel(samples){
-    if (!samples || samples.length < Math.max(MIN_GAZE_CLICK_CALIBRATION, 6)) return null;
-    const X = samples.map(s => s.features);
-    const yx = samples.map(s => s.screenX);
-    const yy = samples.map(s => s.screenY);
-    const wx = fitRidge(X, yx);
-    const wy = fitRidge(X, yy);
-    if (!wx || !wy) return null;
-    return { wx, wy };
-  }
-
-  function predictFromFeatures(features){
-    if (!regressionModel || !features) return null;
-    const x = regressionModel.wx.reduce((acc,w,i) => acc + w * features[i], 0);
-    const y = regressionModel.wy.reduce((acc,w,i) => acc + w * features[i], 0);
-    return { x, y };
-  }
-
-  function recordCalibrationSample(screenX, screenY){
-    const features = getCurrentAveragedFeatures();
-    if (!features) return false;
-    calibrationSamples.push({ features, screenX, screenY, ts: Date.now() });
-    gazeCalibrationClicks += 1;
-    if (regressionModel) {
-      const updated = fitRegressionModel(calibrationSamples);
-      if (updated) regressionModel = updated;
-    }
-    return true;
-  }
-
-  async function initGazeTracking(){
+  async function initHeadTracking(){
     const vision = await loadVisionModule();
     const { FaceLandmarker, FilesetResolver } = vision;
-
-    gazeRunning = true;
-    gazeCalibrationClicks = 0;
-    lastGazePredictionAt = 0;
-    lastGazeData = null;
-    lastFeatureVector = null;
-    featureHistory = [];
-    regressionModel = null;
-    calibrationSamples = [];
-    lastVideoTime = -1;
-
-    window.__TRACK_STATE__ = {
-      tsPerf: performance.now(),
-      attention: "WAITING",
-      reason: "CALIBRATING",
-      gazeX: null,
-      gazeY: null,
-      ok: false
-    };
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      throw new Error('getUserMedia is not available in this browser/context');
-    }
 
     const stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: "user" },
       audio: false
     });
 
-    if (!stream) throw new Error('Camera stream was not created');
-
     video.srcObject = stream;
+
     await video.play().catch(()=>{});
     await new Promise(res => {
       if (video.readyState >= 2) return res();
@@ -1411,14 +1192,17 @@ function markCompletedOnce(){
       },
       runningMode: "VIDEO",
       numFaces: 1,
+      outputFaceBlendshapes: false,
       outputFacialTransformationMatrixes: false
     });
 
-    requestAnimationFrame(gazeLoop);
+    headRunning = true;
+    lastVideoTime = -1;
+    requestAnimationFrame(headLoop);
   }
 
-  function stopGazeTracking(){
-    gazeRunning = false;
+  function stopHeadTracking(){
+    headRunning = false;
     try{
       if (video && video.srcObject){
         const tracks = video.srcObject.getTracks();
@@ -1426,82 +1210,47 @@ function markCompletedOnce(){
       }
       video.srcObject = null;
     } catch {}
-    try {
-      if (faceLandmarker && typeof faceLandmarker.close === 'function') faceLandmarker.close();
-    } catch {}
     faceLandmarker = null;
-
-    lastGazePredictionAt = 0;
-    lastGazeData = null;
-    lastFeatureVector = null;
-    gazeCalibrationClicks = 0;
-    featureHistory = [];
-    regressionModel = null;
-    calibrationSamples = [];
-    lastVideoTime = -1;
-
-    window.__TRACK_STATE__ = {
-      tsPerf: performance.now(),
-      attention: "WAITING",
-      reason: "WAITING",
-      gazeX: null,
-      gazeY: null,
-      ok: false
-    };
   }
 
-  function gazeLoop(){
-    if (!gazeRunning || !faceLandmarker) return;
+  function headLoop(){
+    if (!headRunning) return;
 
-    if (video.readyState >= 2 && video.currentTime !== lastVideoTime){
-      lastVideoTime = video.currentTime;
-      const nowPerf = performance.now();
-      const res = faceLandmarker.detectForVideo(video, nowPerf);
-      const landmarks = res?.faceLandmarks?.[0];
+    if (video.readyState >= 2) {
+      const now = performance.now();
+      if (video.currentTime !== lastVideoTime) {
+        lastVideoTime = video.currentTime;
 
-      if (landmarks && landmarks.length >= 478){
-        const features = extractEyeFeatures(landmarks);
-        if (features){
-          lastFeatureVector = features;
-          featureHistory.push({ ts: Date.now(), features });
-          if (featureHistory.length > FEATURE_HISTORY_MAX) featureHistory.shift();
+        const res = faceLandmarker.detectForVideo(video, now);
 
-          const pred = predictFromFeatures(features);
-          if (pred){
-            lastGazePredictionAt = Date.now();
-            lastGazeData = pred;
-            const { attention, reason } = decideFromGaze(pred);
-            window.__TRACK_STATE__ = {
-              tsPerf: nowPerf,
-              attention,
-              reason,
-              gazeX: pred.x,
-              gazeY: pred.y,
-              ok: attention === "ON_TASK" || attention === "OFF_TASK"
-            };
-          } else {
-            window.__TRACK_STATE__ = {
-              tsPerf: nowPerf,
-              attention: "WAITING",
-              reason: "CALIBRATING",
-              gazeX: null,
-              gazeY: null,
-              ok: false
-            };
-          }
+        if (res?.faceLandmarks?.length) {
+          const features = eyeFeaturesFromLandmarks(res.faceLandmarks[0]);
+          latestGazeFeatures = features;
+          const gaze = predictGaze(features);
+          const { attention, reason } = decideFromGaze(gaze);
+
+          window.__HEAD_STATE__ = {
+            tsPerf: now,
+            attention,
+            reason,
+            gazeX: gaze ? gaze.x : null,
+            gazeY: gaze ? gaze.y : null,
+            ok: !!features
+          };
+        } else {
+          latestGazeFeatures = null;
+          window.__HEAD_STATE__ = {
+            tsPerf: now,
+            attention: "TRACK_LOST",
+            reason: "TRACK_LOST",
+            gazeX: null,
+            gazeY: null,
+            ok: false
+          };
         }
-      } else {
-        window.__TRACK_STATE__ = {
-          tsPerf: nowPerf,
-          attention: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "WAITING" : "TRACK_LOST",
-          reason: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "CALIBRATING" : "TRACK_LOST",
-          gazeX: null,
-          gazeY: null,
-          ok: false
-        };
       }
     }
-    requestAnimationFrame(gazeLoop);
+    requestAnimationFrame(headLoop);
   }
 
   // ---- Input + buttons
@@ -1555,38 +1304,12 @@ function markCompletedOnce(){
     });
   }
 
-
-  if (calibrationDot){
-    calibrationDot.addEventListener('click', (e) => {
-      e.preventDefault();
-      if (!calibrationActive) return;
-
-      const rect = calibrationDot.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top + rect.height / 2;
-
-      if (!recordCalibrationSample(x, y)) {
-        alert('לא זוהו עיניים בצורה יציבה. נסו לשבת מול המצלמה ולהביט בנקודה שוב.');
-        return;
-      }
-
-      advanceCalibrationStep();
-    });
-  }
-
   // ---- Canvas click logic
   function onPointerDown(e){
     if (!sessionRunning || !taskActive) return;
     e.preventDefault();
 
     const pos = getPointerPos(e);
-
-    if (gazeRunning && !calibrationActive) {
-      const clientX = (e.touches && e.touches[0]) ? e.touches[0].clientX : e.clientX;
-      const clientY = (e.touches && e.touches[0]) ? e.touches[0].clientY : e.clientY;
-      recordCalibrationSample(clientX, clientY);
-    }
-
     const hit = pickDotAt(pos);
 
     if (currentAttempt){
@@ -1596,6 +1319,20 @@ function markCompletedOnce(){
         hitDotIndex: (hit === null ? null : hit),
         action: null
       });
+    }
+
+    if (latestGazeFeatures && hit !== null){
+      gazeCalibSamples.push({
+        fx: latestGazeFeatures.fx,
+        fy: latestGazeFeatures.fy,
+        x: pos.x,
+        y: pos.y
+      });
+      if (gazeCalibSamples.length > 80) gazeCalibSamples = gazeCalibSamples.slice(-80);
+      if (gazeCalibSamples.length >= MIN_CALIB_SAMPLES){
+        const fitted = fitAffineModel(gazeCalibSamples);
+        if (fitted) gazeModel = fitted;
+      }
     }
 
     if (hit === null){
@@ -1624,12 +1361,7 @@ function markCompletedOnce(){
   cv.addEventListener('mousedown', onPointerDown);
   cv.addEventListener('touchstart', onPointerDown, { passive:false });
 
-  window.addEventListener('resize', () => {
-    resizeCanvas();
-    if (calibrationActive && calibrationStepIndex >= 0 && calibrationQueue[calibrationStepIndex]) {
-      placeCalibrationDot(calibrationQueue[calibrationStepIndex]);
-    }
-  });
+  window.addEventListener('resize', resizeCanvas);
 
   // init
   resizeCanvas();
