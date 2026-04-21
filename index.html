@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Head Tracking (Clean)</title>
+  <title>Connect-the-Dots + Gaze Tracking (Calibrated)</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -170,6 +170,45 @@
       align-items:center;
     }
 
+    .calibrationStage{
+      position:fixed;
+      inset:0;
+      z-index: 9;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      background: rgba(0,0,0,.42);
+      backdrop-filter: blur(4px);
+    }
+    .calibrationCard{
+      position:absolute;
+      top:20px;
+      left:50%;
+      transform:translateX(-50%);
+      width:min(640px, calc(100% - 24px));
+      background: rgba(15,26,46,.92);
+      border:1px solid rgba(255,255,255,.10);
+      border-radius:22px;
+      box-shadow: var(--shadow);
+      padding:16px 18px;
+      text-align:center;
+    }
+    .calibrationCard h3{margin:0 0 8px; font-size:18px;}
+    .calibrationCard p{margin:0; color:var(--muted); line-height:1.45; font-size:14px;}
+    .calibrationProgress{margin-top:8px; color:rgba(230,234,242,.82); font-size:13px;}
+    .calibrationDot{
+      position:absolute;
+      width:24px;
+      height:24px;
+      border-radius:999px;
+      border:2px solid rgba(255,255,255,.88);
+      background: rgba(120,170,255,.96);
+      box-shadow: 0 0 0 8px rgba(120,170,255,.18);
+      transform: translate(-50%, -50%);
+      cursor:pointer;
+    }
+    .calibrationDot:active{transform: translate(-50%, -50%) scale(.96);}
+
   </style>
 </head>
 
@@ -214,6 +253,17 @@
     <canvas id="cv"></canvas>
   </div>
 
+
+  <div id="calibrationStage" class="calibrationStage" aria-hidden="true">
+    <div class="calibrationCard">
+      <h3>כיול קצר של המצלמה</h3>
+      <p>לחצו על הנקודה הכחולה שמופיעה על המסך. הנקודה תעבור בין כמה מיקומים קבועים.
+      השתדלו לשבת יציב, להביט ישירות בנקודה, וללחוץ רק לאחר שהתמקדתם בה.</p>
+      <div id="calibrationProgress" class="calibrationProgress">מכין כיול…</div>
+    </div>
+    <button id="calibrationDot" class="calibrationDot" type="button" aria-label="נקודת כיול"></button>
+  </div>
+
   <div id="taskOverlay" class="overlay" role="dialog" aria-modal="true">
     <div class="card">
       <h2>מעולה 🎉</h2>
@@ -235,6 +285,8 @@
   </div>
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
+
+<script src="https://webgazer.cs.brown.edu/webgazer.js" defer></script>
 
 <script type="module">
 (() => {
@@ -271,9 +323,18 @@ function markCompletedOnce(){
   const EDGE_PAD = 28;
   const MAX_TRIES = 5000;
 
-  // Head thresholds
-  const YAW_T = 29;      // degrees
-  const PITCH_T = 18;    // degrees
+  // Gaze tracking thresholds / config
+  const EDGE_TOLERANCE_PX = 24;
+  const PREDICTION_STALE_MS = 800;
+  const MIN_GAZE_CLICK_CALIBRATION = 5;
+  const CALIBRATION_REPEATS = 2;
+  const CALIBRATION_POINTS = [
+    { x: 0.5, y: 0.5 },
+    { x: 0.12, y: 0.18 },
+    { x: 0.88, y: 0.18 },
+    { x: 0.12, y: 0.82 },
+    { x: 0.88, y: 0.82 }
+  ];
 
   // Timeline sampling
   const TIMELINE_DT_MS = 100;
@@ -307,6 +368,9 @@ function markCompletedOnce(){
   const btnFollowup = document.getElementById('btnFollowup');
 
   const video = document.getElementById('video');
+  const calibrationStage = document.getElementById('calibrationStage');
+  const calibrationDot = document.getElementById('calibrationDot');
+  const calibrationProgress = document.getElementById('calibrationProgress');
 
   // ---- State
   let sessionRunning = false;
@@ -344,17 +408,21 @@ function markCompletedOnce(){
   let currentTask = null;
   let currentAttempt = null;
 
-  // Head tracking
-  let faceLandmarker = null;
-  let headRunning = false;
-  let lastVideoTime = -1;
+  // Gaze tracking
+  let gazeRunning = false;
+  let gazeCalibrationClicks = 0;
+  let lastGazePredictionAt = 0;
+  let lastGazeData = null;
+  let calibrationActive = false;
+  let calibrationQueue = [];
+  let calibrationStepIndex = -1;
 
-  window.__HEAD_STATE__ = {
+  window.__TRACK_STATE__ = {
     tsPerf: null,
     attention: "WAITING",
     reason: "WAITING",
-    yawDeg: 0,
-    pitchDeg: 0,
+    gazeX: null,
+    gazeY: null,
     ok: false
   };
 
@@ -641,13 +709,59 @@ function markCompletedOnce(){
     taskOverlay.style.display = 'flex';
   }
 
-  function completeTask(){
-    currentTask.endedAtMs = Date.now();
-    currentTask.durationMs = currentTask.endedAtMs - currentTask.startedAtMs;
-    currentTask.completed = true;
+  function buildCalibrationQueue(){
+    const q = [];
+    for (let r = 0; r < CALIBRATION_REPEATS; r++){
+      for (const pt of CALIBRATION_POINTS) q.push(pt);
+    }
+    return q;
+  }
 
-    log.session.totalTasksCompleted += 1;
-    showContinueOverlay();
+  function placeCalibrationDot(pt){
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    calibrationDot.style.left = `${Math.round(pt.x * w)}px`;
+    calibrationDot.style.top = `${Math.round(pt.y * h)}px`;
+  }
+
+  function updateCalibrationProgress(){
+    const total = calibrationQueue.length;
+    const current = Math.min(calibrationStepIndex + 1, total);
+    calibrationProgress.textContent = `שלב ${current} מתוך ${total}`;
+  }
+
+  function advanceCalibrationStep(){
+    calibrationStepIndex += 1;
+    if (calibrationStepIndex >= calibrationQueue.length){
+      finishCalibration();
+      return;
+    }
+    updateCalibrationProgress();
+    placeCalibrationDot(calibrationQueue[calibrationStepIndex]);
+  }
+
+  function beginCalibration(){
+    calibrationQueue = buildCalibrationQueue();
+    calibrationStepIndex = -1;
+    calibrationActive = true;
+    calibrationStage.style.display = 'flex';
+    calibrationStage.setAttribute('aria-hidden', 'false');
+    advanceCalibrationStep();
+  }
+
+  function finishCalibration(){
+    calibrationActive = false;
+    calibrationStage.style.display = 'none';
+    calibrationStage.setAttribute('aria-hidden', 'true');
+    calibrationQueue = [];
+    calibrationStepIndex = -1;
+
+    sessionRunning = true;
+    btnEarly.disabled = false;
+    startTimelineSampling();
+    startNewTask();
+    cancelAnimationFrame(rafId);
+    loop();
   }
 
   async function startSession(pid){
@@ -660,7 +774,7 @@ function markCompletedOnce(){
     btnEarly.disabled = true;
 
     try{
-      await initHeadTracking();
+      await initGazeTracking();
     } catch (e){
       console.error(e);
       alert("יש שגיאה בהפעלת המצלמה/מודל. פתח F12 > Console כדי לראות למה.");
@@ -669,7 +783,6 @@ function markCompletedOnce(){
       return;
     }
 
-    sessionRunning = true;
     log.meta.pid = pid;
     followupPid = pid; // keep PID for the form link
     log.session.startedAtISO = new Date().toISOString();
@@ -678,12 +791,7 @@ function markCompletedOnce(){
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
 
-    btnEarly.disabled = false;
-
-    startTimelineSampling();
-    startNewTask();
-    cancelAnimationFrame(rafId);
-    loop();
+    beginCalibration();
   }
 
   async function finish(reason){
@@ -692,6 +800,8 @@ function markCompletedOnce(){
     if (reason === 'early' || reason === 'timeout') markCompletedOnce();
     sessionRunning = false;
     taskActive = false;
+    calibrationActive = false;
+    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
     cancelAnimationFrame(rafId);
 
     stopTimelineSampling();
@@ -729,7 +839,7 @@ function markCompletedOnce(){
       { filename: `${pidSafe}_report_${ts}.csv`,       mimeType: "text/csv;charset=utf-8", content: reportCsv }
     ];
 
-    stopHeadTracking();
+    stopGazeTracking();
 
     // Show overlay immediately (no waiting)
     resetUI({ showPidOverlay: false });
@@ -794,6 +904,10 @@ function markCompletedOnce(){
     log.tasks = [];
 
     timeline.length = 0;
+    calibrationActive = false;
+    calibrationQueue = [];
+    calibrationStepIndex = -1;
+    if (calibrationStage) { calibrationStage.style.display = 'none'; calibrationStage.setAttribute('aria-hidden', 'true'); }
 
     draw();
   }
@@ -993,10 +1107,10 @@ function markCompletedOnce(){
 
   // ---- TIMELINE sampling
   function mapReasonToOffDirection(reason){
-    if (reason === "HEAD_LEFT")  return "LEFT";
-    if (reason === "HEAD_RIGHT") return "RIGHT";
-    if (reason === "HEAD_UP")    return "UP";
-    if (reason === "HEAD_DOWN")  return "DOWN";
+    if (reason === "GAZE_LEFT")  return "LEFT";
+    if (reason === "GAZE_RIGHT") return "RIGHT";
+    if (reason === "GAZE_UP")    return "UP";
+    if (reason === "GAZE_DOWN")  return "DOWN";
     return "";
   }
 
@@ -1012,7 +1126,7 @@ function markCompletedOnce(){
         ? (now - currentTask.startedAtMs)
         : null;
 
-      const h = window.__HEAD_STATE__ || {};
+      const h = window.__TRACK_STATE__ || {};
       const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
                   : (h.attention === "OFF_TASK") ? "OFFSCREEN"
                   : "UNKNOWN";
@@ -1040,133 +1154,122 @@ function markCompletedOnce(){
     }
   }
 
-  // ---- Head tracking (MediaPipe)
-  function yawPitchFromMatrix(m){
-    const r02 = m[8];
-    const r12 = m[9];
-    const r22 = m[10];
-    const r10 = m[1];
-    const r11 = m[5];
-
-    const yaw = Math.atan2(r02, r22);
-    const pitch = Math.atan2(-r12, Math.sqrt(r10*r10 + r11*r11));
-
-    return { yawDeg: yaw * 180/Math.PI, pitchDeg: pitch * 180/Math.PI };
+  // ---- Gaze tracking (WebGazer)
+  function getViewportBounds(){
+    return {
+      left: 0,
+      top: 0,
+      right: window.innerWidth,
+      bottom: window.innerHeight
+    };
   }
 
-  function decideFromPose(yawDeg, pitchDeg){
-    if (yawDeg >= YAW_T)  return { attention: "OFF_TASK", reason: "HEAD_LEFT"  };
-    if (yawDeg <= -YAW_T) return { attention: "OFF_TASK", reason: "HEAD_RIGHT" };
-
-    if (pitchDeg >= PITCH_T)  return { attention: "OFF_TASK", reason: "HEAD_DOWN" };
-    if (pitchDeg <= -PITCH_T) return { attention: "OFF_TASK", reason: "HEAD_UP"   };
-
-    return { attention: "ON_TASK", reason: "CENTER" };
-  }
-
-  async function loadVisionModule(){
-    const candidates = [
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs",
-      "https://unpkg.com/@mediapipe/tasks-vision@0.10.12/vision_bundle.mjs",
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12",
-      "https://unpkg.com/@mediapipe/tasks-vision@0.10.12"
-    ];
-    let lastErr = null;
-    for (const url of candidates){
-      try{
-        const mod = await import(url);
-        return mod;
-      } catch(e){
-        lastErr = e;
-      }
+  function decideFromGaze(data){
+    if (!data || typeof data.x !== "number" || typeof data.y !== "number") {
+      return { attention: "WAITING", reason: "NO_PREDICTION" };
     }
-    throw lastErr ?? new Error("Failed to import tasks-vision");
+
+    if (Date.now() - lastGazePredictionAt > PREDICTION_STALE_MS) {
+      return { attention: "WAITING", reason: "STALE_PREDICTION" };
+    }
+
+    if (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) {
+      return { attention: "WAITING", reason: "CALIBRATING" };
+    }
+
+    const bounds = getViewportBounds();
+    const x = data.x;
+    const y = data.y;
+
+    if (x < bounds.left - EDGE_TOLERANCE_PX)  return { attention: "OFF_TASK", reason: "GAZE_LEFT"  };
+    if (x > bounds.right + EDGE_TOLERANCE_PX) return { attention: "OFF_TASK", reason: "GAZE_RIGHT" };
+    if (y < bounds.top - EDGE_TOLERANCE_PX)   return { attention: "OFF_TASK", reason: "GAZE_UP"    };
+    if (y > bounds.bottom + EDGE_TOLERANCE_PX)return { attention: "OFF_TASK", reason: "GAZE_DOWN"  };
+
+    return { attention: "ON_TASK", reason: "ONSCREEN" };
   }
 
-  async function initHeadTracking(){
-    const vision = await loadVisionModule();
-    const { FaceLandmarker, FilesetResolver } = vision;
+  async function initGazeTracking(){
+    if (!("webgazer" in window)) {
+      throw new Error("WebGazer library was not loaded.");
+    }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: "user" },
-      audio: false
-    });
+    gazeRunning = true;
+    gazeCalibrationClicks = 0;
+    lastGazePredictionAt = 0;
+    lastGazeData = null;
 
-    video.srcObject = stream;
+    window.__TRACK_STATE__ = {
+      tsPerf: performance.now(),
+      attention: "WAITING",
+      reason: "CALIBRATING",
+      gazeX: null,
+      gazeY: null,
+      ok: false
+    };
 
-    await video.play().catch(()=>{});
-    await new Promise(res => {
-      if (video.readyState >= 2) return res();
-      video.onloadedmetadata = () => res();
-    });
+    window.webgazer
+      .setRegression("ridge")
+      .showVideoPreview(false)
+      .showPredictionPoints(false)
+      .showFaceOverlay(false)
+      .showFaceFeedbackBox(false)
+      .saveDataAcrossSessions(false)
+      .applyKalmanFilter(true)
+      .setGazeListener((data, elapsedTime) => {
+        if (!gazeRunning) return;
 
-    const fileset = await FilesetResolver.forVisionTasks(
-      "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.12/wasm"
-    );
-
-    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
-      baseOptions: {
-        modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-        delegate: "GPU"
-      },
-      runningMode: "VIDEO",
-      numFaces: 1,
-      outputFacialTransformationMatrixes: true
-    });
-
-    headRunning = true;
-    lastVideoTime = -1;
-    requestAnimationFrame(headLoop);
-  }
-
-  function stopHeadTracking(){
-    headRunning = false;
-    try{
-      if (video && video.srcObject){
-        const tracks = video.srcObject.getTracks();
-        tracks.forEach(t => t.stop());
-      }
-      video.srcObject = null;
-    } catch {}
-    faceLandmarker = null;
-  }
-
-  function headLoop(){
-    if (!headRunning) return;
-
-    if (video.readyState >= 2) {
-      const now = performance.now();
-      if (video.currentTime !== lastVideoTime) {
-        lastVideoTime = video.currentTime;
-
-        const res = faceLandmarker.detectForVideo(video, now);
-
-        if (res?.facialTransformationMatrixes?.length) {
-          const m = res.facialTransformationMatrixes[0].data;
-          const { yawDeg, pitchDeg } = yawPitchFromMatrix(m);
-          const { attention, reason } = decideFromPose(yawDeg, pitchDeg);
-
-          window.__HEAD_STATE__ = {
-            tsPerf: now,
-            attention,
-            reason,
-            yawDeg,
-            pitchDeg,
-            ok: true
-          };
-        } else {
-          window.__HEAD_STATE__ = {
-            tsPerf: now,
-            attention: "TRACK_LOST",
-            reason: "TRACK_LOST",
-            yawDeg: 0,
-            pitchDeg: 0,
+        if (!data || typeof data.x !== "number" || typeof data.y !== "number") {
+          window.__TRACK_STATE__ = {
+            tsPerf: performance.now(),
+            attention: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "WAITING" : "TRACK_LOST",
+            reason: (gazeCalibrationClicks < MIN_GAZE_CLICK_CALIBRATION) ? "CALIBRATING" : "TRACK_LOST",
+            gazeX: null,
+            gazeY: null,
             ok: false
           };
+          return;
         }
+
+        lastGazePredictionAt = Date.now();
+        lastGazeData = { x: data.x, y: data.y, elapsedTime: elapsedTime ?? null };
+
+        const { attention, reason } = decideFromGaze(lastGazeData);
+
+        window.__TRACK_STATE__ = {
+          tsPerf: performance.now(),
+          attention,
+          reason,
+          gazeX: data.x,
+          gazeY: data.y,
+          ok: attention !== "TRACK_LOST" && attention !== "WAITING"
+        };
+      });
+
+    await window.webgazer.begin();
+  }
+
+  function stopGazeTracking(){
+    gazeRunning = false;
+    try {
+      if (window.webgazer) {
+        window.webgazer.clearGazeListener();
+        window.webgazer.end();
       }
-    }
-    requestAnimationFrame(headLoop);
+    } catch {}
+
+    lastGazePredictionAt = 0;
+    lastGazeData = null;
+    gazeCalibrationClicks = 0;
+
+    window.__TRACK_STATE__ = {
+      tsPerf: performance.now(),
+      attention: "WAITING",
+      reason: "WAITING",
+      gazeX: null,
+      gazeY: null,
+      ok: false
+    };
   }
 
   // ---- Input + buttons
@@ -1220,10 +1323,35 @@ function markCompletedOnce(){
     });
   }
 
+
+  if (calibrationDot){
+    calibrationDot.addEventListener('click', (e) => {
+      e.preventDefault();
+      if (!calibrationActive || !window.webgazer) return;
+
+      const rect = calibrationDot.getBoundingClientRect();
+      const x = rect.left + rect.width / 2;
+      const y = rect.top + rect.height / 2;
+
+      gazeCalibrationClicks += 1;
+      try {
+        if (typeof window.webgazer.recordScreenPosition === 'function') {
+          window.webgazer.recordScreenPosition(x, y, 'click');
+        }
+      } catch {}
+
+      advanceCalibrationStep();
+    });
+  }
+
   // ---- Canvas click logic
   function onPointerDown(e){
     if (!sessionRunning || !taskActive) return;
     e.preventDefault();
+
+    if (gazeRunning && window.webgazer && !calibrationActive) {
+      gazeCalibrationClicks += 1;
+    }
 
     const pos = getPointerPos(e);
     const hit = pickDotAt(pos);
@@ -1263,7 +1391,12 @@ function markCompletedOnce(){
   cv.addEventListener('mousedown', onPointerDown);
   cv.addEventListener('touchstart', onPointerDown, { passive:false });
 
-  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('resize', () => {
+    resizeCanvas();
+    if (calibrationActive && calibrationStepIndex >= 0 && calibrationQueue[calibrationStepIndex]) {
+      placeCalibrationDot(calibrationQueue[calibrationStepIndex]);
+    }
+  });
 
   // init
   resizeCanvas();
