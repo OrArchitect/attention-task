@@ -262,7 +262,7 @@
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
-<script src="https://unpkg.com/@webgazer-ts/core@latest/dist/webgazer-ts.umd.cjs"></script>
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
 <script type="module">
 (() => {
   // ---- Config
@@ -1084,23 +1084,31 @@ function markCompletedOnce(){
     if (!window.webgazer) throw new Error('WebGazer failed to load');
     if (webgazerReady) return;
 
-    if (typeof window.webgazer.clearData === 'function') {
-      window.webgazer.clearData();
+    let wg = window.webgazer;
+
+    // Configure without assuming every method is chainable in every build.
+    if (typeof wg.saveDataAcrossSessions === 'function') {
+      try { wg.saveDataAcrossSessions(false); } catch {}
+    }
+    if (typeof wg.applyKalmanFilter === 'function') {
+      try { wg.applyKalmanFilter(true); } catch {}
+    }
+    if (typeof wg.showVideo === 'function') {
+      try { wg.showVideo(false); } catch {}
+    }
+    if (typeof wg.showFaceOverlay === 'function') {
+      try { wg.showFaceOverlay(false); } catch {}
+    }
+    if (typeof wg.showFaceFeedbackBox === 'function') {
+      try { wg.showFaceFeedbackBox(false); } catch {}
+    }
+    if (typeof wg.showPredictionPoints === 'function') {
+      try { wg.showPredictionPoints(false); } catch {}
     }
 
-    let wg = window.webgazer
-      .saveDataAcrossSessions(false)
-      .showVideo(false)
-      .showFaceOverlay(false)
-      .showFaceFeedbackBox(false)
-      .showPredictionPoints(false)
-      .applyKalmanFilter(true);
-
-    if (typeof wg.setTracker === 'function') {
-      try { wg = wg.setTracker('TFFacemesh'); } catch {}
-    }
+    // Use stable modules documented by official WebGazer.
     if (typeof wg.setRegression === 'function') {
-      try { wg = wg.setRegression('weightedRidge'); } catch {}
+      try { wg.setRegression('ridge'); } catch {}
     }
 
     wg.setGazeListener((data, elapsedTime) => {
@@ -1108,12 +1116,24 @@ function markCompletedOnce(){
     });
 
     await wg.begin();
+
+    // Clear old calibration AFTER begin() so the current session starts fresh,
+    // but only if the build supports it.
+    if (typeof wg.clearData === 'function') {
+      try { wg.clearData(); } catch {}
+    }
+
     webgazerReady = true;
   }
 
   function stopGazeTracking(){
     try {
-      if (window.webgazer) window.webgazer.end();
+      if (window.webgazer) {
+        if (typeof window.webgazer.clearGazeListener === 'function') {
+          try { window.webgazer.clearGazeListener(); } catch {}
+        }
+        window.webgazer.end();
+      }
     } catch {}
     webgazerReady = false;
     latestPrediction = null;
