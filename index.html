@@ -170,22 +170,6 @@
       align-items:center;
     }
 
-
-    .calib-point{
-      position:absolute;
-      width:22px;
-      height:22px;
-      border-radius:50%;
-      border:none;
-      cursor:pointer;
-      transform:translate(-50%,-50%);
-      background:rgba(90,145,255,0.95);
-      box-shadow:0 0 0 0 rgba(90,145,255,.35);
-      transition:transform .12s ease, box-shadow .12s ease, opacity .2s ease;
-    }
-    .calib-point:hover{ transform:translate(-50%,-50%) scale(1.08); }
-    .calib-point.done{ background:rgba(34,197,94,.95); }
-
   </style>
 </head>
 
@@ -250,13 +234,14 @@
     </div>
   </div>
 
-  
 
-  <div id="calibOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
-    <div class="card" style="max-width:900px; position:relative; min-height:520px;">
-      <h2 id="calibTitle">כיול מבט קצר</h2>
-      <p id="calibText">לפני תחילת המשימה, הסתכלו על כל נקודה ולחצו עליה 3 פעמים. לאחר סיום הכיול, המטלה תתחיל אוטומטית.</p>
-      <div id="calibStage" style="position:relative; width:100%; height:420px; margin-top:10px;"></div>
+
+  <div id="calibrationOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
+    <div class="card" style="width:min(900px, calc(100% - 32px)); position:relative; min-height:420px;">
+      <h2 id="calibTitle">כיול מבט</h2>
+      <p id="calibText">הביטו בנקודה הכחולה ולחצו עליה 3 פעמים בכל מיקום.</p>
+      <div id="calibDot" style="position:absolute; width:26px; height:26px; border-radius:50%; background:rgba(90,145,255,.98); box-shadow:0 0 0 6px rgba(90,145,255,.18); transform:translate(-50%,-50%); cursor:pointer; display:none;"></div>
+      <div id="calibCounter" style="position:absolute; bottom:16px; left:50%; transform:translateX(-50%); color:var(--muted); font-size:14px;"></div>
     </div>
   </div>
 
@@ -298,6 +283,10 @@ function markCompletedOnce(){
   const EDGE_PAD = 28;
   const MAX_TRIES = 5000;
 
+  // Head thresholds
+  const YAW_T = 29;      // degrees
+  const PITCH_T = 18;    // degrees
+
   // Timeline sampling
   const TIMELINE_DT_MS = 100;
 
@@ -328,11 +317,11 @@ function markCompletedOnce(){
   const followupOverlay = document.getElementById('followupOverlay');
   const followupMsgEl = document.getElementById('followupMsg');
   const btnFollowup = document.getElementById('btnFollowup');
-
-  const calibOverlay = document.getElementById('calibOverlay');
-  const calibStage = document.getElementById('calibStage');
+  const calibrationOverlay = document.getElementById('calibrationOverlay');
+  const calibDot = document.getElementById('calibDot');
   const calibTitle = document.getElementById('calibTitle');
   const calibText = document.getElementById('calibText');
+  const calibCounter = document.getElementById('calibCounter');
 
   const video = document.getElementById('video');
 
@@ -373,17 +362,18 @@ function markCompletedOnce(){
   let currentAttempt = null;
 
   // Gaze tracking (WebGazer)
-  let webgazerReady = false;
+  let gazeRunning = false;
+  let latestGaze = null;
+  let latestVideoFrame = null;
   let calibrationActive = false;
-  let pendingPid = null;
-  let latestPrediction = null;
-  let gazeListenerAttached = false;
-  const CALIB_CLICKS_PER_POINT = 3;
+  let calibrationResolve = null;
+  let calibrationSamples = [];
   const CALIB_POINTS = [
-    {x:10,y:10},{x:50,y:10},{x:90,y:10},
-    {x:10,y:50},{x:50,y:50},{x:90,y:50},
-    {x:10,y:90},{x:50,y:90},{x:90,y:90}
+    {x:0.10,y:0.12},{x:0.50,y:0.12},{x:0.90,y:0.12},
+    {x:0.10,y:0.50},{x:0.50,y:0.50},{x:0.90,y:0.50},
+    {x:0.10,y:0.88},{x:0.50,y:0.88},{x:0.90,y:0.88}
   ];
+  const CALIB_CLICKS_PER_POINT = 3;
 
   window.__GAZE_STATE__ = {
     tsPerf: null,
@@ -696,31 +686,23 @@ function markCompletedOnce(){
     btnEarly.disabled = true;
 
     try{
-      pendingPid = pid;
-      await initGazeTracking();
-      showCalibration();
+      await initGazeTrackingAndCalibrate();
     } catch (e){
       console.error(e);
-      alert("יש שגיאה בהפעלת המצלמה/מעקב המבט. פתח F12 > Console כדי לראות למה.");
+      alert("יש שגיאה בהפעלת המצלמה/מודל. פתח F12 > Console כדי לראות למה.");
       btnStartInline.disabled = false;
       btnEarly.disabled = true;
       return;
     }
-  }
-
-  function beginTaskAfterCalibration(){
-    const pid = pendingPid;
-    if (!pid) return;
 
     sessionRunning = true;
     log.meta.pid = pid;
-    followupPid = pid;
+    followupPid = pid; // keep PID for the form link
     log.session.startedAtISO = new Date().toISOString();
     startAt = Date.now();
 
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
-    calibOverlay.style.display = 'none';
 
     btnEarly.disabled = false;
 
@@ -826,9 +808,6 @@ function markCompletedOnce(){
     secureWarn.style.display = isSecureEnough() ? "none" : "block";
     btnEarly.disabled = true;
     btnStartInline.disabled = true;
-    if (calibOverlay) calibOverlay.style.display = 'none';
-    if (calibStage) calibStage.innerHTML = '';
-    pendingPid = null;
 
     log.meta.pid = null;
     log.session.startedAtISO = null;
@@ -1047,150 +1026,6 @@ function markCompletedOnce(){
     return "";
   }
 
-  function classifyGaze(pred){
-    if (!pred || !Number.isFinite(pred.x) || !Number.isFinite(pred.y)) {
-      return { attention: 'UNKNOWN', reason: 'NO_PREDICTION' };
-    }
-    const rect = cv.getBoundingClientRect();
-    const left = 0, top = 0, right = rect.width, bottom = rect.height;
-    if (pred.x >= left && pred.x <= right && pred.y >= top && pred.y <= bottom){
-      return { attention: 'ON_TASK', reason: 'ONSCREEN' };
-    }
-    const dxL = Math.abs(pred.x - left);
-    const dxR = Math.abs(pred.x - right);
-    const dyT = Math.abs(pred.y - top);
-    const dyB = Math.abs(pred.y - bottom);
-    const m = Math.min(dxL, dxR, dyT, dyB);
-    if (m === dxL) return { attention: 'OFF_TASK', reason: 'GAZE_LEFT' };
-    if (m === dxR) return { attention: 'OFF_TASK', reason: 'GAZE_RIGHT' };
-    if (m === dyT) return { attention: 'OFF_TASK', reason: 'GAZE_UP' };
-    return { attention: 'OFF_TASK', reason: 'GAZE_DOWN' };
-  }
-
-  function updateGazeStateFromPrediction(pred, elapsedTime){
-    latestPrediction = pred;
-    const cls = classifyGaze(pred);
-    window.__GAZE_STATE__ = {
-      tsPerf: performance.now(),
-      attention: cls.attention,
-      reason: cls.reason,
-      x: pred && Number.isFinite(pred.x) ? pred.x : null,
-      y: pred && Number.isFinite(pred.y) ? pred.y : null,
-      ok: !!(pred && Number.isFinite(pred.x) && Number.isFinite(pred.y))
-    };
-  }
-
-  async function initGazeTracking(){
-    if (!window.webgazer) throw new Error('WebGazer failed to load');
-    if (webgazerReady) return;
-
-    let wg = window.webgazer;
-
-    // Configure without assuming every method is chainable in every build.
-    if (typeof wg.saveDataAcrossSessions === 'function') {
-      try { wg.saveDataAcrossSessions(false); } catch {}
-    }
-    if (typeof wg.applyKalmanFilter === 'function') {
-      try { wg.applyKalmanFilter(true); } catch {}
-    }
-    if (typeof wg.showVideo === 'function') {
-      try { wg.showVideo(false); } catch {}
-    }
-    if (typeof wg.showFaceOverlay === 'function') {
-      try { wg.showFaceOverlay(false); } catch {}
-    }
-    if (typeof wg.showFaceFeedbackBox === 'function') {
-      try { wg.showFaceFeedbackBox(false); } catch {}
-    }
-    if (typeof wg.showPredictionPoints === 'function') {
-      try { wg.showPredictionPoints(false); } catch {}
-    }
-
-    // Use stable modules documented by official WebGazer.
-    if (typeof wg.setRegression === 'function') {
-      try { wg.setRegression('ridge'); } catch {}
-    }
-
-    wg.setGazeListener((data, elapsedTime) => {
-      updateGazeStateFromPrediction(data, elapsedTime);
-    });
-
-    await wg.begin();
-
-    // Clear old calibration AFTER begin() so the current session starts fresh,
-    // but only if the build supports it.
-    if (typeof wg.clearData === 'function') {
-      try { wg.clearData(); } catch {}
-    }
-
-    webgazerReady = true;
-  }
-
-  function stopGazeTracking(){
-    try {
-      if (window.webgazer) {
-        if (typeof window.webgazer.clearGazeListener === 'function') {
-          try { window.webgazer.clearGazeListener(); } catch {}
-        }
-        window.webgazer.end();
-      }
-    } catch {}
-    webgazerReady = false;
-    latestPrediction = null;
-    window.__GAZE_STATE__ = {
-      tsPerf: null,
-      attention: 'WAITING',
-      reason: 'WAITING',
-      x: null, y: null, ok: false
-    };
-  }
-
-  function renderCalibrationPoint(idx, clicksDone){
-    const p = CALIB_POINTS[idx];
-    calibStage.innerHTML = '';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'calib-point';
-    btn.style.left = p.x + '%';
-    btn.style.top = p.y + '%';
-    calibStage.appendChild(btn);
-    calibTitle.textContent = 'כיול מבט קצר';
-    calibText.textContent = `הסתכלו על הנקודה ולחצו עליה ${CALIB_CLICKS_PER_POINT} פעמים. נקודה ${idx+1} מתוך ${CALIB_POINTS.length}.`;
-    return btn;
-  }
-
-  function showCalibration(){
-    calibrationActive = true;
-    pidOverlay.style.display = 'none';
-    followupOverlay.style.display = 'none';
-    taskOverlay.style.display = 'none';
-    calibOverlay.style.display = 'flex';
-
-    let idx = 0;
-    let clicks = 0;
-    let btn = renderCalibrationPoint(idx, clicks);
-
-    const handle = (e) => {
-      e.preventDefault();
-      clicks += 1;
-      btn.style.transform = 'translate(-50%,-50%) scale(' + (1 + 0.08*clicks) + ')';
-      if (clicks >= CALIB_CLICKS_PER_POINT){
-        idx += 1;
-        clicks = 0;
-        if (idx >= CALIB_POINTS.length){
-          calibrationActive = false;
-          calibStage.removeEventListener('click', handle, true);
-          calibStage.innerHTML = '';
-          beginTaskAfterCalibration();
-          return;
-        }
-        btn = renderCalibrationPoint(idx, clicks);
-      }
-    };
-
-    calibStage.addEventListener('click', handle, true);
-  }
-
   function startTimelineSampling(){
     if (timelineTimer) clearInterval(timelineTimer);
     timelineTimer = setInterval(() => {
@@ -1229,6 +1064,135 @@ function markCompletedOnce(){
       clearInterval(timelineTimer);
       timelineTimer = null;
     }
+  }
+
+  // ---- Gaze tracking (WebGazer + 9-point calibration)
+  function classifyPredictedPoint(x, y){
+    const rect = cv.getBoundingClientRect();
+    const marginX = Math.max(24, rect.width * 0.03);
+    const marginY = Math.max(24, rect.height * 0.03);
+
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) {
+      return { attention: 'TRACK_LOST', reason: 'TRACK_LOST' };
+    }
+    if (x < -marginX) return { attention: 'OFF_TASK', reason: 'GAZE_LEFT' };
+    if (x > rect.width + marginX) return { attention: 'OFF_TASK', reason: 'GAZE_RIGHT' };
+    if (y < -marginY) return { attention: 'OFF_TASK', reason: 'GAZE_UP' };
+    if (y > rect.height + marginY) return { attention: 'OFF_TASK', reason: 'GAZE_DOWN' };
+    return { attention: 'ON_TASK', reason: 'CENTER' };
+  }
+
+  function placeCalibrationDot(idx){
+    const point = CALIB_POINTS[idx];
+    const card = calibrationOverlay.querySelector('.card');
+    const rect = card.getBoundingClientRect();
+    calibDot.style.display = 'block';
+    calibDot.style.left = (point.x * rect.width) + 'px';
+    calibDot.style.top = (point.y * rect.height) + 'px';
+  }
+
+  async function runCalibration(){
+    calibrationActive = true;
+    calibrationSamples = [];
+    calibrationOverlay.style.display = 'flex';
+    calibTitle.textContent = 'כיול מבט';
+    calibText.textContent = 'הביטו בנקודה הכחולה ולחצו עליה 3 פעמים בכל מיקום.';
+
+    let pointIdx = 0;
+    let clicksAtPoint = 0;
+    placeCalibrationDot(pointIdx);
+    calibCounter.textContent = `נקודה ${pointIdx + 1} מתוך ${CALIB_POINTS.length} — לחיצה ${clicksAtPoint} מתוך ${CALIB_CLICKS_PER_POINT}`;
+
+    return await new Promise((resolve) => {
+      calibrationResolve = resolve;
+
+      const onDotClick = () => {
+        if (!calibrationActive) return;
+        const pred = latestGaze;
+        if (pred && Number.isFinite(pred.x) && Number.isFinite(pred.y)) {
+          calibrationSamples.push({ x: pred.x, y: pred.y, t: Date.now(), pointIdx });
+        }
+        clicksAtPoint += 1;
+        if (clicksAtPoint >= CALIB_CLICKS_PER_POINT) {
+          pointIdx += 1;
+          clicksAtPoint = 0;
+          if (pointIdx >= CALIB_POINTS.length) {
+            calibDot.removeEventListener('click', onDotClick);
+            calibDot.style.display = 'none';
+            calibrationOverlay.style.display = 'none';
+            calibrationActive = false;
+            calibrationResolve?.();
+            calibrationResolve = null;
+            return;
+          }
+          placeCalibrationDot(pointIdx);
+        }
+        calibCounter.textContent = `נקודה ${Math.min(pointIdx + 1, CALIB_POINTS.length)} מתוך ${CALIB_POINTS.length} — לחיצה ${clicksAtPoint} מתוך ${CALIB_CLICKS_PER_POINT}`;
+      };
+
+      calibDot.addEventListener('click', onDotClick);
+    });
+  }
+
+  async function initGazeTrackingAndCalibrate(){
+    if (!window.webgazer) throw new Error('WebGazer not loaded');
+
+    try { if (window.webgazer.clearData) window.webgazer.clearData(); } catch {}
+    try { if (window.webgazer.saveDataAcrossSessions) window.webgazer.saveDataAcrossSessions(false); } catch {}
+    try { if (window.webgazer.setTracker) window.webgazer.setTracker('clmtrackr'); } catch {}
+    try { if (window.webgazer.setRegression) window.webgazer.setRegression('ridge'); } catch {}
+    try { if (window.webgazer.showVideo) window.webgazer.showVideo(false); } catch {}
+    try { if (window.webgazer.showFaceOverlay) window.webgazer.showFaceOverlay(false); } catch {}
+    try { if (window.webgazer.showFaceFeedbackBox) window.webgazer.showFaceFeedbackBox(false); } catch {}
+    try { if (window.webgazer.showPredictionPoints) window.webgazer.showPredictionPoints(false); } catch {}
+
+    window.webgazer.setGazeListener((data, elapsedTime) => {
+      latestVideoFrame = elapsedTime;
+      if (!data || !Number.isFinite(data.x) || !Number.isFinite(data.y)) {
+        latestGaze = null;
+        window.__GAZE_STATE__ = {
+          tsPerf: performance.now(),
+          attention: 'TRACK_LOST',
+          reason: 'TRACK_LOST',
+          x: null,
+          y: null,
+          ok: false
+        };
+        return;
+      }
+
+      latestGaze = { x: data.x, y: data.y };
+      const { attention, reason } = classifyPredictedPoint(data.x, data.y);
+      window.__GAZE_STATE__ = {
+        tsPerf: performance.now(),
+        attention,
+        reason,
+        x: data.x,
+        y: data.y,
+        ok: true
+      };
+    });
+
+    await window.webgazer.begin();
+    gazeRunning = true;
+
+    await new Promise(r => setTimeout(r, 1200));
+    await runCalibration();
+  }
+
+  function stopGazeTracking(){
+    gazeRunning = false;
+    latestGaze = null;
+    latestVideoFrame = null;
+    try { if (window.webgazer && window.webgazer.end) window.webgazer.end(); } catch {}
+    window.__GAZE_STATE__ = {
+      tsPerf: null,
+      attention: 'WAITING',
+      reason: 'WAITING',
+      x: null,
+      y: null,
+      ok: false
+    };
   }
 
   // ---- Input + buttons
@@ -1325,7 +1289,7 @@ function markCompletedOnce(){
   cv.addEventListener('mousedown', onPointerDown);
   cv.addEventListener('touchstart', onPointerDown, { passive:false });
 
-  window.addEventListener('resize', resizeCanvas);
+  window.addEventListener('resize', () => { resizeCanvas(); if (calibrationActive) { const idx = Math.min(CALIB_POINTS.length-1, Math.max(0, Math.floor(calibrationSamples.length / CALIB_CLICKS_PER_POINT))); placeCalibrationDot(idx); } });
 
   // init
   resizeCanvas();
