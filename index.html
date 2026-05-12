@@ -207,7 +207,7 @@
         <button id="btnStartInline" class="btn" disabled>התחל</button>
         <div class="pidHint">לאחר הזנת קוד תקין, לחצו על "התחל"</div>
         <div id="secureWarn" class="pidWarn">
-          
+          ⚠️ מצלמה דורשת <b>http://localhost</b> או <b>https</b>. אל תריץ דרך file://
         </div>
       </div>
     </div>
@@ -254,6 +254,9 @@
     <div id="calibDot" class="calibDot"></div>
   </div>
 
+  <video id="video" class="hiddenCam" playsinline autoplay muted></video>
+
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
 <script type="module">
 (() => {
   // ---- Config
@@ -261,21 +264,7 @@
   const EXP_DURATION_MS = EXP_DURATION_MIN * 60 * 1000;
   const DOT_COUNT = 16;
 
-// ---- One-time participation (minimal client-side guard)
-// Marks completion only when participant finishes (early or timeout).
-const ONCE_KEY = "study_completed_v1";
-function hasCompletedOnce(){
-  try { return localStorage.getItem(ONCE_KEY) === "true"; } catch { return false; }
-}
-function markCompletedOnce(){
-  try {
-    localStorage.setItem(ONCE_KEY, "true");
-    localStorage.setItem(ONCE_KEY + "_ts", new Date().toISOString());
-  } catch {}
-}
-
-
-  const DOT_RADIUS = 14;
+const DOT_RADIUS = 14;
   const DOT_LABEL_SIZE = 14;
   const LINE_WIDTH = 3;
 
@@ -389,7 +378,11 @@ function markCompletedOnce(){
   // ---- Helpers
   function validPID(pid){ return /^[A-Z]{3}[0-9]{3}$/.test(pid); }
 
-  function isSecureEnough(){ return true; }
+  function isSecureEnough(){
+    if (window.isSecureContext) return true;
+    const h = location.hostname;
+    return (h === "localhost" || h === "127.0.0.1");
+  }
 
   function getPidSafe(){
     const p = String(log.meta.pid || "PID").toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -675,28 +668,32 @@ function markCompletedOnce(){
   }
 
   async function startSession(pid){
-    // Camera/gaze tracking is intentionally disabled in this version.
+    if (!isSecureEnough()){
+      alert("המצלמה דורשת https או http://localhost. אל תריץ דרך file://");
+      return;
+    }
+
     btnStartInline.disabled = true;
-    btnEarly.disabled = false;
+    btnEarly.disabled = true;
+
+    try{
+      await initWebgazer();
+    } catch (e){
+      console.error(e);
+      alert("יש שגיאה בהפעלת המצלמה/מעקב המבט. פתח F12 > Console כדי לראות למה.");
+      btnStartInline.disabled = false;
+      btnEarly.disabled = true;
+      return;
+    }
+
+    pendingStartPid = pid;
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
-
-    sessionRunning = true;
-    log.meta.pid = pid;
-    followupPid = pid;
-    log.session.startedAtISO = new Date().toISOString();
-    startAt = Date.now();
-
-    startTimelineSampling();
-    startNewTask();
-    cancelAnimationFrame(rafId);
-    loop();
+    calibIntroOverlay.style.display = 'flex';
   }
 
   async function finish(reason){
     if (!sessionRunning) return;
-    // Mark as completed ONLY on real completion states
-    if (reason === 'early' || reason === 'timeout') markCompletedOnce();
     sessionRunning = false;
     taskActive = false;
     cancelAnimationFrame(rafId);
@@ -737,6 +734,8 @@ function markCompletedOnce(){
       { filename: `${pidSafe}_task_summary_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: taskSummaryCsv },
       { filename: `${pidSafe}_point_events_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: pointEventsCsv }
     ];
+
+    stopWebgazer();
 
     // Show overlay immediately (no waiting)
     resetUI({ showPidOverlay: false });
@@ -786,7 +785,7 @@ function markCompletedOnce(){
     pidOverlay.style.display = showPidOverlay ? 'flex' : 'none';
     pidEl.disabled = false;
     pidEl.value = '';
-    secureWarn.style.display = "none";
+    secureWarn.style.display = isSecureEnough() ? "none" : "block";
     btnEarly.disabled = true;
     btnStartInline.disabled = true;
 
@@ -1011,7 +1010,11 @@ function markCompletedOnce(){
       const tFromTaskMs = (currentTask && currentTask.startedAtMs)
         ? (now - currentTask.startedAtMs)
         : null;
-      const onOff = "NOT_TRACKED";
+
+      const h = gazeState || {};
+      const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
+                  : (h.attention === "OFF_TASK") ? "OFFSCREEN"
+                  : "UNKNOWN";
 
       const timeHundredths = Math.round(tFromSessionMs / 10);
 
@@ -1033,14 +1036,124 @@ function markCompletedOnce(){
     }
   }
 
-  // ---- Camera/gaze functions removed in this version.
-  function setGazeStateFromPrediction(data){ return; }
-  async function initWebgazer(){ return; }
-  function stopWebgazer(){ return; }
-  function positionCalibDot(){ return; }
-  function startCalibrationFlow(){ return; }
-  function finishCalibrationFlow(){ return; }
-  function recordCalibrationClick(clientX, clientY){ return; }
+  function setGazeStateFromPrediction(data){
+    if (!data || typeof data.x !== 'number' || typeof data.y !== 'number'){
+      gazeState = {
+        tsPerf: performance.now(),
+        attention: "TRACK_LOST",
+        reason: "TRACK_LOST",
+        x: null,
+        y: null,
+        ok: false
+      };
+      return;
+    }
+
+    const rect = cv.getBoundingClientRect();
+    const inside = data.x >= rect.left && data.x <= rect.right && data.y >= rect.top && data.y <= rect.bottom;
+
+    gazeState = {
+      tsPerf: performance.now(),
+      attention: inside ? "ON_TASK" : "OFF_TASK",
+      reason: inside ? "ONSCREEN" : "OFFSCREEN",
+      x: data.x,
+      y: data.y,
+      ok: true
+    };
+  }
+
+  async function initWebgazer(){
+    if (!window.webgazer) throw new Error('WebGazer failed to load');
+    if (typeof window.webgazer.end === 'function') {
+      try { window.webgazer.end(); } catch {}
+    }
+    if (typeof window.webgazer.clearData === 'function') {
+      try { window.webgazer.clearData(); } catch {}
+    }
+    if (typeof window.webgazer.saveDataAcrossSessions === 'function') {
+      try { window.webgazer.saveDataAcrossSessions(false); } catch {}
+    }
+    if (typeof window.webgazer.showVideoPreview === 'function') {
+      try { window.webgazer.showVideoPreview(false); } catch {}
+    }
+    if (typeof window.webgazer.showPredictionPoints === 'function') {
+      try { window.webgazer.showPredictionPoints(false); } catch {}
+    }
+    if (typeof window.webgazer.showFaceOverlay === 'function') {
+      try { window.webgazer.showFaceOverlay(false); } catch {}
+    }
+    if (typeof window.webgazer.showFaceFeedbackBox === 'function') {
+      try { window.webgazer.showFaceFeedbackBox(false); } catch {}
+    }
+    if (typeof window.webgazer.applyKalmanFilter === 'function') {
+      try { window.webgazer.applyKalmanFilter(true); } catch {}
+    }
+
+    window.webgazer.setGazeListener((data) => {
+      setGazeStateFromPrediction(data);
+    });
+
+    await window.webgazer.begin();
+    webgazerReady = true;
+  }
+
+  function stopWebgazer(){
+    webgazerReady = false;
+    try {
+      if (window.webgazer && typeof window.webgazer.end === 'function') {
+        window.webgazer.end();
+      }
+    } catch {}
+    gazeState = {
+      tsPerf: null,
+      attention: "WAITING",
+      reason: "WAITING",
+      x: null,
+      y: null,
+      ok: false
+    };
+  }
+
+  function positionCalibDot(){
+    const p = CALIB_POINTS[calibPointIndex];
+    if (!p) return;
+    calibDot.style.left = `${window.innerWidth * p.x}px`;
+    calibDot.style.top = `${window.innerHeight * p.y}px`;
+  }
+
+  function startCalibrationFlow(){
+    calibPointIndex = 0;
+    calibClicksOnPoint = 0;
+    calibIntroOverlay.style.display = 'none';
+    calibStage.style.display = 'block';
+    positionCalibDot();
+  }
+
+  function finishCalibrationFlow(){
+    calibStage.style.display = 'none';
+    const pid = pendingStartPid;
+    pendingStartPid = null;
+
+    sessionRunning = true;
+    log.meta.pid = pid;
+    followupPid = pid;
+    log.session.startedAtISO = new Date().toISOString();
+    startAt = Date.now();
+
+    btnEarly.disabled = false;
+    startTimelineSampling();
+    startNewTask();
+    cancelAnimationFrame(rafId);
+    loop();
+  }
+
+  function recordCalibrationClick(clientX, clientY){
+    try {
+      if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function') {
+        window.webgazer.recordScreenPosition(clientX, clientY, 'click');
+      }
+    } catch {}
+  }
 
   // ---- Input + buttons
   pidEl.addEventListener('input', () => {
@@ -1048,7 +1161,7 @@ function markCompletedOnce(){
     v = v.replace(/[^A-Z0-9]/g,'').slice(0,6);
     pidEl.value = v;
 
-    secureWarn.style.display = "none";
+    secureWarn.style.display = isSecureEnough() ? "none" : "block";
     btnStartInline.disabled = !validPID(v);
   });
 
@@ -1060,10 +1173,6 @@ function markCompletedOnce(){
 ;
 
   btnStartInline.addEventListener('click', async () => {
-    if (hasCompletedOnce()){
-      alert('נראה שכבר השתתפת במשימה הזו. תודה רבה!');
-      return;
-    }
     const pid = (pidEl.value || '').toUpperCase();
     if (!validPID(pid)){
       alert('קוד לא תקין. יש להזין 3 אותיות אנגלית + 3 ספרות (למשל ABC123).');
@@ -1073,6 +1182,26 @@ function markCompletedOnce(){
   });
 
   btnEarly.addEventListener('click', () => finish('early'));
+  if (btnCalibBegin){
+    btnCalibBegin.addEventListener('click', () => startCalibrationFlow());
+  }
+  if (calibDot){
+    calibDot.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      recordCalibrationClick(e.clientX, e.clientY);
+      calibClicksOnPoint += 1;
+      if (calibClicksOnPoint >= CALIB_CLICKS_PER_POINT){
+        calibPointIndex += 1;
+        calibClicksOnPoint = 0;
+        if (calibPointIndex >= CALIB_POINTS.length){
+          finishCalibrationFlow();
+        } else {
+          positionCalibDot();
+        }
+      }
+    });
+  }
   btnContinue.addEventListener('click', () => { if (sessionRunning) startNewTask(); });
 
   // ---- Follow-up questionnaire
@@ -1141,6 +1270,7 @@ function markCompletedOnce(){
 
     selectedSet.add(hit);
     connections.push(hit);
+    try{ if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function') window.webgazer.recordScreenPosition(pos.x + cv.getBoundingClientRect().left, pos.y + cv.getBoundingClientRect().top, 'click'); } catch {}
     if (currentAttempt) {
       const rec = currentAttempt.clicks[currentAttempt.clicks.length-1];
       rec.action = 'toggle_on';
