@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + WebGazer Tracking (Clean)</title>
+  <title>Connect-the-Dots + WebGazer On/Off Screen Tracking</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -256,7 +256,6 @@
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
 <script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
 <script type="module">
 (() => {
@@ -357,6 +356,7 @@ function markCompletedOnce(){
       actualDurationMs: null,
       totalTasksCompleted: 0,
       totalErrors: 0,
+      totalWrongDotSelections: 0,
       totalAttempts: 0
     },
     tasks: []
@@ -652,7 +652,10 @@ function markCompletedOnce(){
       startedAtMs: Date.now(),
       endedAtMs: null,
       durationMs: null,
-      errors: 0,
+      errors: 0, // full-sequence errors kept for compatibility
+      wrongDotSelections: 0, // wrong dot choices during the task
+      correctPointsReached: 0,
+      pointEvents: [],
       completed: false,
       attempts: []
     };
@@ -736,14 +739,16 @@ function markCompletedOnce(){
     followupPid = pidSafe; // keep PID even after resetUI()
     const ts = isoStamp();
 
-    const timelineCsv = buildTimelineCSVString();
-    const offSummaryCsv = buildOffSummaryCSVString();
-    const reportCsv = buildReportCSVString();
+    const gazeTimelineCsv = buildTimelineCSVString();
+    const gazeSummaryCsv = buildOffSummaryCSVString();
+    const taskSummaryCsv = buildReportCSVString();
+    const pointEventsCsv = buildPointEventsCSVString();
 
     const filesToSend = [
-      { filename: `${pidSafe}_timeline_${ts}.csv`,     mimeType: "text/csv;charset=utf-8", content: timelineCsv },
-      { filename: `${pidSafe}_off_summary_${ts}.csv`,  mimeType: "text/csv;charset=utf-8", content: offSummaryCsv },
-      { filename: `${pidSafe}_report_${ts}.csv`,       mimeType: "text/csv;charset=utf-8", content: reportCsv }
+      { filename: `${pidSafe}_gaze_timeline_${ts}.csv`,     mimeType: "text/csv;charset=utf-8", content: gazeTimelineCsv },
+      { filename: `${pidSafe}_gaze_summary_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: gazeSummaryCsv },
+      { filename: `${pidSafe}_task_summary_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: taskSummaryCsv },
+      { filename: `${pidSafe}_point_events_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: pointEventsCsv }
     ];
 
     stopWebgazer();
@@ -807,6 +812,7 @@ function markCompletedOnce(){
     log.session.actualDurationMs = null;
     log.session.totalTasksCompleted = 0;
     log.session.totalErrors = 0;
+    log.session.totalWrongDotSelections = 0;
     log.session.totalAttempts = 0;
     log.tasks = [];
 
@@ -819,39 +825,99 @@ function markCompletedOnce(){
   }
 
   // ---- CSV builders
-  function buildReportCSVString(){
-    const header = ['מספר משימה','זמן משימה (שניות)','כמות טעויות במשימה'];
-    const rows = [header];
+  function csvEscape(v){
+    const s = String(v ?? '');
+    if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+    return s;
+  }
 
-    const reasonTag = (log.session.endedReason === 'timeout') ? 'TIMEOUT'
-                    : (log.session.endedReason === 'early')   ? 'EARLY'
-                    : 'UNKNOWN';
+  function rowsToCSV(rows){
+    return '\uFEFF' + rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+  }
+
+  function buildReportCSVString(){
+    const header = [
+      'participantId',
+      'sessionStartedAtISO',
+      'sessionEndedAtISO',
+      'endedReason',
+      'totalScreensCompleted',
+      'totalWrongDotSelections',
+      'taskNumber',
+      'taskCompleted',
+      'taskDurationMs',
+      'taskDurationSec',
+      'wrongDotSelectionsInTask',
+      'correctPointsReached',
+      'attemptsInTask'
+    ];
+    const rows = [header];
 
     for (const t of log.tasks){
       if (!t.startedAtMs) continue;
-
-      const durSec = (typeof t.durationMs === 'number') ? (t.durationMs/1000) : '';
-      const durStr = (durSec === '') ? '' : String(Math.round(durSec*1000)/1000);
-
-      const taskLabel = t.completed
-        ? String(t.taskIndex)
-        : `${t.taskIndex} (INCOMPLETE_${reasonTag})`;
-
-      rows.push([taskLabel, durStr, String(t.errors || 0)]);
+      rows.push([
+        log.meta.pid || '',
+        log.session.startedAtISO || '',
+        log.session.endedAtISO || '',
+        log.session.endedReason || '',
+        log.session.totalTasksCompleted || 0,
+        log.session.totalWrongDotSelections || 0,
+        t.taskIndex,
+        t.completed ? 'TRUE' : 'FALSE',
+        typeof t.durationMs === 'number' ? t.durationMs : '',
+        typeof t.durationMs === 'number' ? Math.round((t.durationMs/1000)*1000)/1000 : '',
+        t.wrongDotSelections || 0,
+        t.correctPointsReached || 0,
+        (t.attempts || []).length
+      ]);
     }
 
-    const esc = (v) => {
-      const s = String(v ?? '');
-      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-      return s;
-    };
+    return rowsToCSV(rows);
+  }
 
-    const csv = rows.map(r => r.map(esc).join(',')).join('\r\n');
-    return '\uFEFF' + csv;
+  function buildPointEventsCSVString(){
+    const header = [
+      'participantId',
+      'taskNumber',
+      'attemptNumber',
+      'eventType',
+      'selectedDotNumber',
+      'expectedDotNumber',
+      'isWrongSelection',
+      'tFromSessionMs',
+      'tFromTaskMs',
+      'timeSincePreviousCorrectPointMs',
+      'x',
+      'y'
+    ];
+    const rows = [header];
+
+    for (const t of log.tasks || []){
+      for (const a of t.attempts || []){
+        for (const c of a.clicks || []){
+          rows.push([
+            log.meta.pid || '',
+            t.taskIndex,
+            a.attemptIndex,
+            c.action || '',
+            c.hitDotIndex == null ? '' : c.hitDotIndex + 1,
+            c.expectedDotIndex == null ? '' : c.expectedDotIndex + 1,
+            c.isWrongSelection === true ? 'TRUE' : (c.isWrongSelection === false ? 'FALSE' : ''),
+            c.tFromSessionMs ?? '',
+            c.tFromTaskMs ?? '',
+            c.timeSincePreviousCorrectPointMs ?? '',
+            c.x ?? '',
+            c.y ?? ''
+          ]);
+        }
+      }
+    }
+
+    return rowsToCSV(rows);
   }
 
   function buildTimelineCSVString(){
-    const header = ['taskNumber','tFromSessionMs','tFromTaskMs','timeHundredths','onScreen/Offscreen','connections','OffDirection'];
+    const header = ['taskNumber','tFromSessionMs','tFromTaskMs','timeHundredths','onScreen/Offscreen','connections'];
     const rows = [header];
 
     for (const r of timeline){
@@ -861,8 +927,7 @@ function markCompletedOnce(){
         r.tFromTaskMs,
         r.timeHundredths,
         r["onScreen/Offscreen"],
-        r.connections,
-        r.OffDirection
+        r.connections
       ]);
     }
 
@@ -885,11 +950,10 @@ function markCompletedOnce(){
         byTask.set(key, {
           taskNumber: key,
           totalTimePerTaskMs: 0,
-          upCount: 0, upTimeMs: 0,
-          downCount: 0, downTimeMs: 0,
-          leftCount: 0, leftTimeMs: 0,
-          rightCount: 0, rightTimeMs: 0,
-          totalOffMs: 0
+          offscreenEventCount: 0,
+          totalOffscreenMs: 0,
+          totalOnscreenMs: 0,
+          unknownMs: 0
         });
       }
       return byTask.get(key);
@@ -901,114 +965,53 @@ function markCompletedOnce(){
       if (typeof t.durationMs === "number") rec.totalTimePerTaskMs = t.durationMs;
     }
 
-    const maxTaskMs = new Map();
+    const stateByTask = new Map();
     for (const r of timeline){
       const taskKey = String(r.taskNumber ?? "");
-      const v = Number(r.tFromTaskMs);
-      if (!Number.isFinite(v)) continue;
-      maxTaskMs.set(taskKey, Math.max(maxTaskMs.get(taskKey) ?? 0, v));
-    }
-    for (const [taskKey, mx] of maxTaskMs.entries()){
-      const rec = ensureTask(taskKey);
-      if (!rec.totalTimePerTaskMs || rec.totalTimePerTaskMs === 0){
-        rec.totalTimePerTaskMs = mx;
-      }
-    }
-
-    const stateByTask = new Map();
-
-    for (let i=0;i<timeline.length;i++){
-      const r = timeline[i];
-      const taskKey = String(r.taskNumber ?? "");
       if (!taskKey) continue;
-
       const rec = ensureTask(taskKey);
-
-      const onoff = String(r["onScreen/Offscreen"] || "");
-      const dir = String(r.OffDirection || "");
-
-      const st = stateByTask.get(taskKey) ?? { inOff:false, dir:"" };
+      const onoff = String(r["onScreen/Offscreen"] || "UNKNOWN");
+      const st = stateByTask.get(taskKey) ?? { wasOff:false };
 
       if (onoff === "OFFSCREEN"){
-        rec.totalOffMs += TIMELINE_DT_MS;
-
-        if (dir === "UP") rec.upTimeMs += TIMELINE_DT_MS;
-        else if (dir === "DOWN") rec.downTimeMs += TIMELINE_DT_MS;
-        else if (dir === "LEFT") rec.leftTimeMs += TIMELINE_DT_MS;
-        else if (dir === "RIGHT") rec.rightTimeMs += TIMELINE_DT_MS;
-      }
-
-      if (onoff === "OFFSCREEN"){
-        if (!st.inOff){
-          st.inOff = true;
-          st.dir = dir;
-
-          if (dir === "UP") rec.upCount += 1;
-          else if (dir === "DOWN") rec.downCount += 1;
-          else if (dir === "LEFT") rec.leftCount += 1;
-          else if (dir === "RIGHT") rec.rightCount += 1;
-
-        } else {
-          if (dir && dir !== st.dir){
-            st.dir = dir;
-
-            if (dir === "UP") rec.upCount += 1;
-            else if (dir === "DOWN") rec.downCount += 1;
-            else if (dir === "LEFT") rec.leftCount += 1;
-            else if (dir === "RIGHT") rec.rightCount += 1;
-          }
-        }
+        rec.totalOffscreenMs += TIMELINE_DT_MS;
+        if (!st.wasOff) rec.offscreenEventCount += 1;
+        st.wasOff = true;
       } else {
-        st.inOff = false;
-        st.dir = "";
+        if (onoff === "ONSCREEN") rec.totalOnscreenMs += TIMELINE_DT_MS;
+        else rec.unknownMs += TIMELINE_DT_MS;
+        st.wasOff = false;
       }
-
       stateByTask.set(taskKey, st);
     }
 
     const header = [
       "taskNumber",
-      "TOTAL TIME PER TASK",
-      "no of UP EVENTS",
-      "TOTAL TIME UP EVENTS",
-      "no ofDOWN EVENTS",
-      "TOTAL TIME Down EVENTS",
-      "no ofLEFT EVENTS",
-      "TOTAL TIME left EVENTS",
-      "no ofRIGHT EVENTS",
-      "TOTAL TIME right EVENTS",
-      "TOTAL TIME OFF"
+      "totalTimePerTaskMs",
+      "offscreenEventCount",
+      "totalOffscreenMs",
+      "totalOnscreenMs",
+      "unknownGazeMs",
+      "offscreenPercent"
     ];
-
     const rows = [header];
 
-    const sorted = [...byTask.values()].sort((a,b) => {
-      const A = Number(a.taskNumber), B = Number(b.taskNumber);
-      if (Number.isFinite(A) && Number.isFinite(B)) return A - B;
-      return String(a.taskNumber).localeCompare(String(b.taskNumber));
-    });
-
+    const sorted = [...byTask.values()].sort((a,b) => Number(a.taskNumber) - Number(b.taskNumber));
     for (const t of sorted){
       if (!t.taskNumber) continue;
+      const denom = t.totalOffscreenMs + t.totalOnscreenMs;
       rows.push([
         t.taskNumber,
         t.totalTimePerTaskMs,
-        t.upCount, t.upTimeMs,
-        t.downCount, t.downTimeMs,
-        t.leftCount, t.leftTimeMs,
-        t.rightCount, t.rightTimeMs,
-        t.totalOffMs
+        t.offscreenEventCount,
+        t.totalOffscreenMs,
+        t.totalOnscreenMs,
+        t.unknownMs,
+        denom > 0 ? Math.round((t.totalOffscreenMs / denom) * 10000) / 100 : ''
       ]);
     }
 
-    const esc = (v) => {
-      const s = String(v ?? "");
-      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-      return s;
-    };
-
-    const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
-    return "\uFEFF" + csv;
+    return rowsToCSV(rows);
   }
 
   // ---- TIMELINE sampling
@@ -1037,8 +1040,7 @@ function markCompletedOnce(){
         tFromTaskMs: (tFromTaskMs == null ? "" : tFromTaskMs),
         timeHundredths,
         "onScreen/Offscreen": onOff,
-        connections: connections.length,
-        OffDirection: ""
+        connections: connections.length
       });
     }, TIMELINE_DT_MS);
   }
@@ -1248,32 +1250,68 @@ function markCompletedOnce(){
     const pos = getPointerPos(e);
     const hit = pickDotAt(pos);
 
+    const clickTs = Date.now();
+    const expectedDotIndex = connections.length;
+    const lastCorrectEvent = currentTask && currentTask.pointEvents && currentTask.pointEvents.length
+      ? currentTask.pointEvents[currentTask.pointEvents.length - 1]
+      : null;
+
     if (currentAttempt){
       currentAttempt.clicks.push({
-        ts: Date.now(),
+        ts: clickTs,
+        tFromSessionMs: startAt ? clickTs - startAt : '',
+        tFromTaskMs: currentTask ? clickTs - currentTask.startedAtMs : '',
         x: pos.x, y: pos.y,
         hitDotIndex: (hit === null ? null : hit),
+        expectedDotIndex: (hit === null ? null : expectedDotIndex),
+        isWrongSelection: null,
+        timeSincePreviousCorrectPointMs: '',
         action: null
       });
     }
 
     if (hit === null){
-      if (currentAttempt) currentAttempt.clicks[currentAttempt.clicks.length-1].action = 'miss';
+      if (currentAttempt) { const rec = currentAttempt.clicks[currentAttempt.clicks.length-1]; rec.action = 'miss'; rec.expectedDotIndex = ''; rec.isWrongSelection = ''; }
       return;
     }
 
     if (selectedSet.has(hit)){
       selectedSet.delete(hit);
       connections = connections.filter(idx => idx !== hit);
-      if (currentAttempt) currentAttempt.clicks[currentAttempt.clicks.length-1].action = 'toggle_off';
+      if (currentAttempt) { const rec = currentAttempt.clicks[currentAttempt.clicks.length-1]; rec.action = 'toggle_off'; rec.isWrongSelection = false; }
       draw();
       return;
     }
 
+    const isCorrectNextDot = (hit === expectedDotIndex);
+    const timeSincePreviousCorrectPointMs = (isCorrectNextDot && lastCorrectEvent && typeof lastCorrectEvent.ts === 'number')
+      ? clickTs - lastCorrectEvent.ts
+      : (isCorrectNextDot ? clickTs - currentTask.startedAtMs : '');
+
     selectedSet.add(hit);
     connections.push(hit);
     try{ if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function') window.webgazer.recordScreenPosition(pos.x + cv.getBoundingClientRect().left, pos.y + cv.getBoundingClientRect().top, 'click'); } catch {}
-    if (currentAttempt) currentAttempt.clicks[currentAttempt.clicks.length-1].action = 'toggle_on';
+    if (currentAttempt) {
+      const rec = currentAttempt.clicks[currentAttempt.clicks.length-1];
+      rec.action = 'toggle_on';
+      rec.isWrongSelection = !isCorrectNextDot;
+      rec.timeSincePreviousCorrectPointMs = timeSincePreviousCorrectPointMs;
+    }
+
+    if (isCorrectNextDot){
+      currentTask.correctPointsReached = Math.max(currentTask.correctPointsReached || 0, hit + 1);
+      currentTask.pointEvents.push({
+        ts: clickTs,
+        dotIndex: hit,
+        tFromSessionMs: startAt ? clickTs - startAt : '',
+        tFromTaskMs: clickTs - currentTask.startedAtMs,
+        timeSincePreviousCorrectPointMs
+      });
+    } else {
+      currentTask.wrongDotSelections = (currentTask.wrongDotSelections || 0) + 1;
+      log.session.totalWrongDotSelections = (log.session.totalWrongDotSelections || 0) + 1;
+    }
+
     draw();
 
     if (connections.length === DOT_COUNT){
