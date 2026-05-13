@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V5</title>
+  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V7</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V6_SAFE_START</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V7_FALLBACK_CONTINUE</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -377,6 +377,7 @@ const DOT_RADIUS = 14;
   // Camera / pupil tracking placeholder
   let cameraStream = null;
   let cameraReady = false;
+  let gazeTrackingAvailable = false;
   let webgazerPollTimer = null;
   let lastPredictionAt = 0;
 
@@ -756,21 +757,32 @@ const DOT_RADIUS = 14;
     btnStartInline.disabled = true;
     btnEarly.disabled = true;
 
+    let trackingStarted = false;
+
     try{
       await initCameraOnly();
+      trackingStarted = true;
     } catch (e){
       console.error(e);
-      alert("יש שגיאה בהפעלת המצלמה: " + (e.name || "Error") + " - " + (e.message || "") + "\nודא שנתת הרשאה למצלמה ושהעמוד רץ ב-https או localhost.");
-      btnStartInline.disabled = false;
-      btnEarly.disabled = true;
-      return;
+      gazeTrackingAvailable = false;
+
+      // Important:
+      // WebGazer may fail on GitHub Pages because it tries to load internal FaceMesh/MediaPipe
+      // assets from the project folder and receives 404. This must NOT block the experiment.
+      setCameraStatus('WEBGAZER FAILED — task will continue, gaze marked UNKNOWN. Error: ' + (e.name || 'Error') + ' - ' + (e.message || ''));
+      updateGazeBadge('UNKNOWN', 'WEBGAZER_FAILED');
     }
 
     pendingStartPid = pid;
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
 
-    startGazeCalibrationIntro();
+    if (trackingStarted){
+      startGazeCalibrationIntro();
+    } else {
+      // Continue directly to the task. Timeline will record UNKNOWN gaze.
+      finishCalibrationFlow();
+    }
   }
 
   async function finish(reason){
@@ -1127,7 +1139,8 @@ const DOT_RADIUS = 14;
         : null;
 
       const h = gazeState || {};
-      const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
+      const onOff = (!gazeTrackingAvailable) ? "UNKNOWN"
+                  : (h.attention === "ON_TASK") ? "ONSCREEN"
                   : (h.attention === "OFF_TASK") ? "OFFSCREEN"
                   : (h.attention === "CAMERA_ON") ? "CAMERA_ON"
                   : "UNKNOWN";
@@ -1310,6 +1323,7 @@ const DOT_RADIUS = 14;
       }
 
       cameraReady = true;
+      gazeTrackingAvailable = true;
       updateGazeBadge('WAITING', 'CALIBRATE');
       setCameraStatus('WEBGAZER: ON | ready for calibration');
 
@@ -1343,6 +1357,8 @@ const DOT_RADIUS = 14;
         }
       }, 250);
     } catch (err) {
+      gazeTrackingAvailable = false;
+      cameraReady = false;
       setCameraStatus('WEBGAZER ERROR: ' + (err.name || 'Error') + ' - ' + (err.message || ''));
       throw err;
     }
@@ -1350,6 +1366,7 @@ const DOT_RADIUS = 14;
 
   function stopWebGazerTracking(){
     cameraReady = false;
+    gazeTrackingAvailable = false;
     if (webgazerPollTimer){
       clearInterval(webgazerPollTimer);
       webgazerPollTimer = null;
