@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Camera ON/OFF Tracking</title>
+  <title>Connect-the-Dots + Camera ON/OFF Tracking V2</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -141,20 +141,13 @@
 
     .hiddenCam{
       position: fixed;
-      right: 14px;
-      bottom: 14px;
-      width: 160px;
-      height: 120px;
-      object-fit: cover;
-      border-radius: 14px;
-      border: 1px solid rgba(255,255,255,.18);
-      box-shadow: var(--shadow);
-      opacity: .82;
-      z-index: 7;
-      transform: scaleX(-1);
-      background: rgba(0,0,0,.25);
+      left: -9999px;
+      top: -9999px;
+      width: 1px;
+      height: 1px;
+      opacity: 0;
       pointer-events: none;
-      display:none;
+      display:block;
     }
 
     @media (max-width: 560px){
@@ -188,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_ONOFF_V1_PUPIL_CALIBRATION</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_ONOFF_V2_HIDDEN_CAMERA_9PT_CALIBRATION</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -253,8 +246,8 @@
 
   <div id="gazeCalibOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
     <div class="card">
-      <h2>כיול קצר למעקב מבט</h2>
-      <p>בשלב הבא תופיע נקודה כחולה על המסך. הסתכלו על הנקודה ולחצו עליה 3 פעמים בכל מיקום. הכיול נועד להבחין בין מבט על המסך לבין מבט מחוץ למסך.</p>
+      <h2>כיול גבולות המסך</h2>
+      <p>בשלב הבא תופיע נקודה כחולה ב־9 מיקומים על המסך. בכל מיקום הסתכלו על הנקודה ולחצו עליה 3 פעמים. כך המערכת לומדת את טווח תנועת האישון כאשר המבט נמצא בתוך גבולות המסך.</p>
       <div class="actions">
         <button id="btnGazeCalibBegin" class="btn">התחל כיול</button>
       </div>
@@ -396,10 +389,14 @@ const DOT_RADIUS = 14;
   let gazeCalibration = null;
   const GAZE_CALIB_POINTS = [
     {x:0.50,y:0.50,label:'מרכז המסך'},
-    {x:0.15,y:0.15,label:'שמאל למעלה'},
-    {x:0.85,y:0.15,label:'ימין למעלה'},
-    {x:0.15,y:0.85,label:'שמאל למטה'},
-    {x:0.85,y:0.85,label:'ימין למטה'}
+    {x:0.10,y:0.10,label:'שמאל למעלה'},
+    {x:0.50,y:0.10,label:'למעלה במרכז'},
+    {x:0.90,y:0.10,label:'ימין למעלה'},
+    {x:0.10,y:0.50,label:'שמאל במרכז'},
+    {x:0.90,y:0.50,label:'ימין במרכז'},
+    {x:0.10,y:0.90,label:'שמאל למטה'},
+    {x:0.50,y:0.90,label:'למטה במרכז'},
+    {x:0.90,y:0.90,label:'ימין למטה'}
   ];
   const GAZE_CALIB_CLICKS_PER_POINT = 3;
   let gazeCalibIndex = 0;
@@ -1251,8 +1248,10 @@ const DOT_RADIUS = 14;
         maxX: Math.min(1, Math.max(...xs) + marginX),
         minY: Math.max(0, Math.min(...ys) - marginY),
         maxY: Math.min(1, Math.max(...ys) + marginY),
-        sampleCount: valid.length
+        sampleCount: valid.length,
+        createdAtISO: new Date().toISOString()
       };
+      setCameraStatus(`CALIBRATED | xRange=${gazeCalibration.minX.toFixed(3)}-${gazeCalibration.maxX.toFixed(3)} | yRange=${gazeCalibration.minY.toFixed(3)}-${gazeCalibration.maxY.toFixed(3)} | samples=${gazeCalibration.sampleCount}`);
     }
 
     finishCalibrationFlow();
@@ -1436,7 +1435,7 @@ const DOT_RADIUS = 14;
 
     cameraStream = stream;
     video.srcObject = stream;
-    video.style.display = 'block';
+    video.style.display = 'block'; // hidden off-screen; used only for processing
     setCameraStatus('CAMERA: stream received, starting video...');
 
     try {
