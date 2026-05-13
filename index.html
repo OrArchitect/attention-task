@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V4</title>
+  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V5</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V4_ALIGNED_TASK_BOUNDS</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V5_LIVE_INDICATOR</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -261,7 +261,10 @@
 
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
-  <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:420px;">
+  <div id="gazeLiveBadge" style="position:fixed;right:14px;bottom:14px;z-index:25;background:rgba(15,26,46,.94);border:1px solid rgba(255,255,255,.18);border-radius:999px;padding:10px 18px;color:#e6eaf2;font-size:15px;font-weight:700;direction:ltr;display:none;box-shadow:0 10px 30px rgba(0,0,0,.35);">
+    GAZE: WAITING
+  </div>
+  <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:520px;">
     WEBGAZER: waiting
   </div>
   <canvas id="pupilCanvas" width="180" height="80" style="display:none;"></canvas>
@@ -330,6 +333,7 @@ const DOT_RADIUS = 14;
   const gazeCalibDot = document.getElementById('gazeCalibDot');
   const gazeCalibText = document.getElementById('gazeCalibText');
   const cameraStatus = document.getElementById('cameraStatus');
+  const gazeLiveBadge = document.getElementById('gazeLiveBadge');
   const pupilCanvas = document.getElementById('pupilCanvas');
   const pupilCtx = pupilCanvas ? pupilCanvas.getContext('2d', { willReadFrequently: true }) : null;
 
@@ -373,6 +377,8 @@ const DOT_RADIUS = 14;
   // Camera / pupil tracking placeholder
   let cameraStream = null;
   let cameraReady = false;
+  let webgazerPollTimer = null;
+  let lastPredictionAt = 0;
 
   // ---- Local pupil tracking, no external libraries.
   // This does NOT yet classify ON/OFF screen; it only verifies that we can track a dark pupil/eye-region signal.
@@ -1175,6 +1181,20 @@ const DOT_RADIUS = 14;
 
 
 
+
+  function updateGazeBadge(label, detail){
+    if (!gazeLiveBadge) return;
+    gazeLiveBadge.style.display = 'block';
+    gazeLiveBadge.textContent = `GAZE: ${label}${detail ? ' | ' + detail : ''}`;
+    if (label === 'ONSCREEN'){
+      gazeLiveBadge.style.borderColor = 'rgba(74,222,128,.55)';
+    } else if (label === 'OFFSCREEN'){
+      gazeLiveBadge.style.borderColor = 'rgba(248,113,113,.65)';
+    } else {
+      gazeLiveBadge.style.borderColor = 'rgba(250,204,21,.55)';
+    }
+  }
+
   function classifyGazeFromPrediction(data){
     const now = performance.now();
 
@@ -1191,19 +1211,43 @@ const DOT_RADIUS = 14;
         yNorm: null,
         confidence: 0
       };
+      updateGazeBadge('UNKNOWN', 'NO_PREDICTION');
       return;
     }
 
-    const b = getTaskBounds();
-    const tolerancePx = 45;
+    lastPredictionAt = Date.now();
 
-    const inside = data.x >= (b.left - tolerancePx) && data.x <= (b.right + tolerancePx) &&
-                   data.y >= (b.top - tolerancePx) && data.y <= (b.bottom + tolerancePx);
+    const b = getTaskBounds();
+
+    // We define "on-screen" as being inside the experimental task area,
+    // with tolerance. Since task dots are generated inside the same bounds,
+    // calibration and task positions are now aligned.
+    const tolerancePx = 70;
+
+    const insideTaskArea = data.x >= (b.left - tolerancePx) && data.x <= (b.right + tolerancePx) &&
+                           data.y >= (b.top - tolerancePx) && data.y <= (b.bottom + tolerancePx);
+
+    // Also keep a true browser-window check for debugging.
+    const insideViewport = data.x >= 0 && data.x <= window.innerWidth &&
+                           data.y >= 0 && data.y <= window.innerHeight;
+
+    let reason = 'OFFSCREEN';
+    let attention = 'OFF_TASK';
+
+    if (insideTaskArea){
+      reason = 'ONSCREEN';
+      attention = 'ON_TASK';
+    } else if (insideViewport){
+      // The gaze is still inside the browser window, but outside the calibrated task region.
+      // For the experiment, this is treated as OFFSCREEN/OFF_TASK because it is away from task area.
+      reason = 'OFFSCREEN_IN_WINDOW';
+      attention = 'OFF_TASK';
+    }
 
     gazeState = {
       tsPerf: now,
-      attention: inside ? "ON_TASK" : "OFF_TASK",
-      reason: inside ? "ONSCREEN" : "OFFSCREEN",
+      attention,
+      reason,
       x: Math.round(data.x),
       y: Math.round(data.y),
       ok: true,
@@ -1213,6 +1257,7 @@ const DOT_RADIUS = 14;
       confidence: 1
     };
 
+    updateGazeBadge(attention === 'ON_TASK' ? 'ONSCREEN' : 'OFFSCREEN', `x=${gazeState.x}, y=${gazeState.y}`);
     setCameraStatus(`WEBGAZER: ${gazeState.reason} | x=${gazeState.x}, y=${gazeState.y}`);
   }
 
@@ -1243,7 +1288,38 @@ const DOT_RADIUS = 14;
       await window.webgazer.begin();
 
       cameraReady = true;
+      updateGazeBadge('WAITING', 'CALIBRATE');
       setCameraStatus('WEBGAZER: ON | ready for calibration');
+
+      if (webgazerPollTimer) clearInterval(webgazerPollTimer);
+      webgazerPollTimer = setInterval(async () => {
+        if (!cameraReady || !window.webgazer) return;
+        try {
+          if (typeof window.webgazer.getCurrentPrediction === 'function') {
+            const pred = await window.webgazer.getCurrentPrediction();
+            classifyGazeFromPrediction(pred);
+          }
+        } catch (e) {
+          // keep listener as primary source
+        }
+
+        if (Date.now() - lastPredictionAt > 2500 && sessionRunning){
+          gazeState = {
+            tsPerf: performance.now(),
+            attention: "UNKNOWN",
+            reason: "PREDICTION_STALE",
+            x: null,
+            y: null,
+            ok: false,
+            pupilFound: false,
+            xNorm: null,
+            yNorm: null,
+            confidence: 0
+          };
+          updateGazeBadge('UNKNOWN', 'PREDICTION_STALE');
+          setCameraStatus('WEBGAZER: UNKNOWN | prediction stale');
+        }
+      }, 250);
     } catch (err) {
       setCameraStatus('WEBGAZER ERROR: ' + (err.name || 'Error') + ' - ' + (err.message || ''));
       throw err;
@@ -1252,6 +1328,11 @@ const DOT_RADIUS = 14;
 
   function stopWebGazerTracking(){
     cameraReady = false;
+    if (webgazerPollTimer){
+      clearInterval(webgazerPollTimer);
+      webgazerPollTimer = null;
+    }
+    if (gazeLiveBadge) gazeLiveBadge.style.display = 'none';
     try {
       if (window.webgazer && typeof window.webgazer.end === 'function') window.webgazer.end();
     } catch {}
@@ -1284,16 +1365,21 @@ const DOT_RADIUS = 14;
 
   function finishGazeCalibration(){
     if (gazeCalibStage) gazeCalibStage.style.display = 'none';
+    updateGazeBadge('WAITING', 'STARTING_TASK');
     setCameraStatus('WEBGAZER: calibration complete | starting task');
     finishCalibrationFlow();
   }
 
-  function recordGazeCalibrationClick(){
+  function recordGazeCalibrationClick(e){
     const p = GAZE_CALIB_POINTS[gazeCalibIndex];
     const sp = getCalibrationScreenPoint(p);
 
+    const clickX = e && typeof e.clientX === 'number' ? e.clientX : sp.x;
+    const clickY = e && typeof e.clientY === 'number' ? e.clientY : sp.y;
+
     try {
       if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function'){
+        window.webgazer.recordScreenPosition(clickX, clickY, 'click');
         window.webgazer.recordScreenPosition(sp.x, sp.y, 'click');
         // Repeat slightly to strengthen calibration at this exact point.
         window.webgazer.recordScreenPosition(sp.x, sp.y, 'click');
@@ -1413,7 +1499,7 @@ const DOT_RADIUS = 14;
     gazeCalibDot.addEventListener('click', (e) => {
       e.preventDefault();
       e.stopPropagation();
-      recordGazeCalibrationClick();
+      recordGazeCalibrationClick(e);
     });
   }
   if (calibDot){
