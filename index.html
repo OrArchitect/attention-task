@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V9_INSET_CALIBRATION</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V10_SAFE_CALIBRATION_ZONE</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -255,7 +255,7 @@
   </div>
 
   <div id="gazeCalibStage" style="position:fixed;inset:0;z-index:30;display:none;pointer-events:none;">
-    <div id="gazeCalibDot" style="position:absolute;width:26px;height:26px;border-radius:999px;background:#7aaaff;box-shadow:0 0 0 8px rgba(122,170,255,.20);transform:translate(-50%,-50%);cursor:pointer;pointer-events:auto;"></div>
+    <div id="gazeCalibDot" style="position:absolute;width:36px;height:36px;border-radius:999px;background:#7aaaff;box-shadow:0 0 0 12px rgba(122,170,255,.20);transform:translate(-50%,-50%);cursor:pointer;pointer-events:auto;"></div>
     <div id="gazeCalibText" style="position:fixed;left:50%;top:18px;transform:translateX(-50%);background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:10px 16px;color:#e6eaf2;font-size:14px;">Calibration</div>
   </div>
 
@@ -288,7 +288,7 @@ const DOT_RADIUS = 14;
 
 
   const MIN_DIST = 52;
-  const EDGE_PAD = 110; // aligned with calibration bounds; inset for clickable calibration points
+  const EDGE_PAD = 150; // safe inset: keeps task/calibration away from browser edges; inset for clickable calibration points
   const MAX_TRIES = 5000;
 
   // Timeline sampling
@@ -396,15 +396,15 @@ const DOT_RADIUS = 14;
 
   let gazeCalibration = null;
   const GAZE_CALIB_POINTS = [
-    {x:0.04,y:0.04,label:'שמאל למעלה'},
-    {x:0.50,y:0.04,label:'למעלה במרכז'},
-    {x:0.96,y:0.04,label:'ימין למעלה'},
-    {x:0.04,y:0.50,label:'שמאל במרכז'},
+    {x:0.10,y:0.10,label:'שמאל למעלה'},
+    {x:0.50,y:0.10,label:'למעלה במרכז'},
+    {x:0.90,y:0.10,label:'ימין למעלה'},
+    {x:0.10,y:0.50,label:'שמאל במרכז'},
     {x:0.50,y:0.50,label:'מרכז המסך'},
-    {x:0.96,y:0.50,label:'ימין במרכז'},
-    {x:0.04,y:0.96,label:'שמאל למטה'},
-    {x:0.50,y:0.96,label:'למטה במרכז'},
-    {x:0.96,y:0.96,label:'ימין למטה'}
+    {x:0.90,y:0.50,label:'ימין במרכז'},
+    {x:0.10,y:0.90,label:'שמאל למטה'},
+    {x:0.50,y:0.90,label:'למטה במרכז'},
+    {x:0.90,y:0.90,label:'ימין למטה'}
   ];
   const GAZE_CALIB_CLICKS_PER_POINT = 4;
   let gazeCalibIndex = 0;
@@ -456,13 +456,21 @@ const DOT_RADIUS = 14;
 
   function getTaskBounds(){
     const rect = cv.getBoundingClientRect();
+
+    // Safe clickable/trackable content area:
+    // The browser toolbar and OS taskbar are outside the webpage, but near-edge dots
+    // can still be difficult to click or calibrate accurately. This keeps both
+    // calibration and task dots comfortably inside the visible canvas.
+    const topExtra = 55;
+    const bottomExtra = 45;
+
     return {
       left: rect.left + EDGE_PAD,
       right: rect.right - EDGE_PAD,
-      top: rect.top + EDGE_PAD,
-      bottom: rect.bottom - EDGE_PAD,
+      top: rect.top + EDGE_PAD + topExtra,
+      bottom: rect.bottom - EDGE_PAD - bottomExtra,
       width: Math.max(1, rect.width - EDGE_PAD*2),
-      height: Math.max(1, rect.height - EDGE_PAD*2)
+      height: Math.max(1, rect.height - EDGE_PAD*2 - topExtra - bottomExtra)
     };
   }
 
