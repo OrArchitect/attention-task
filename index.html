@@ -176,12 +176,20 @@
     .calibStage{position:fixed; inset:0; display:none; z-index:12; pointer-events:none;}
     .calibDot{position:absolute; width:24px; height:24px; border-radius:999px; background:#7aaaff; box-shadow:0 0 0 6px rgba(122,170,255,.18); transform:translate(-50%,-50%); cursor:pointer; pointer-events:auto;}
     .statusNote{margin-top:10px; color: rgba(230,234,242,.72); font-size: 12.5px;}
+  
+    /* Hide WebGazer's internal prediction dot/overlays if the fork displays them */
+    #webgazerGazeDot, #webgazerVideoContainer, #webgazerFaceOverlay, #webgazerFaceFeedbackBox{
+      display:none !important;
+      opacity:0 !important;
+      pointer-events:none !important;
+    }
+
   </style>
 </head>
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V10_SAFE_CALIBRATION_ZONE</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V11_LOWER_CALIBRATION</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -255,7 +263,7 @@
   </div>
 
   <div id="gazeCalibStage" style="position:fixed;inset:0;z-index:30;display:none;pointer-events:none;">
-    <div id="gazeCalibDot" style="position:absolute;width:36px;height:36px;border-radius:999px;background:#7aaaff;box-shadow:0 0 0 12px rgba(122,170,255,.20);transform:translate(-50%,-50%);cursor:pointer;pointer-events:auto;"></div>
+    <div id="gazeCalibDot" style="position:absolute;width:44px;height:44px;border-radius:999px;background:#7aaaff;box-shadow:0 0 0 16px rgba(122,170,255,.24);transform:translate(-50%,-50%);cursor:pointer;pointer-events:auto;"></div>
     <div id="gazeCalibText" style="position:fixed;left:50%;top:18px;transform:translateX(-50%);background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:10px 16px;color:#e6eaf2;font-size:14px;">Calibration</div>
   </div>
 
@@ -288,7 +296,7 @@ const DOT_RADIUS = 14;
 
 
   const MIN_DIST = 52;
-  const EDGE_PAD = 150; // safe inset: keeps task/calibration away from browser edges; inset for clickable calibration points
+  const EDGE_PAD = 170; // safe inset for task + calibration; // safe inset: keeps task/calibration away from browser edges; inset for clickable calibration points
   const MAX_TRIES = 5000;
 
   // Timeline sampling
@@ -396,15 +404,15 @@ const DOT_RADIUS = 14;
 
   let gazeCalibration = null;
   const GAZE_CALIB_POINTS = [
-    {x:0.10,y:0.10,label:'שמאל למעלה'},
-    {x:0.50,y:0.10,label:'למעלה במרכז'},
-    {x:0.90,y:0.10,label:'ימין למעלה'},
-    {x:0.10,y:0.50,label:'שמאל במרכז'},
+    {x:0.18,y:0.18,label:'שמאל למעלה'},
+    {x:0.50,y:0.18,label:'למעלה במרכז'},
+    {x:0.82,y:0.18,label:'ימין למעלה'},
+    {x:0.18,y:0.50,label:'שמאל במרכז'},
     {x:0.50,y:0.50,label:'מרכז המסך'},
-    {x:0.90,y:0.50,label:'ימין במרכז'},
-    {x:0.10,y:0.90,label:'שמאל למטה'},
-    {x:0.50,y:0.90,label:'למטה במרכז'},
-    {x:0.90,y:0.90,label:'ימין למטה'}
+    {x:0.82,y:0.50,label:'ימין במרכז'},
+    {x:0.18,y:0.82,label:'שמאל למטה'},
+    {x:0.50,y:0.82,label:'למטה במרכז'},
+    {x:0.82,y:0.82,label:'ימין למטה'}
   ];
   const GAZE_CALIB_CLICKS_PER_POINT = 4;
   let gazeCalibIndex = 0;
@@ -457,31 +465,38 @@ const DOT_RADIUS = 14;
   function getTaskBounds(){
     const rect = cv.getBoundingClientRect();
 
-    // Safe clickable/trackable content area:
-    // The browser toolbar and OS taskbar are outside the webpage, but near-edge dots
-    // can still be difficult to click or calibrate accurately. This keeps both
-    // calibration and task dots comfortably inside the visible canvas.
-    const topExtra = 55;
-    const bottomExtra = 45;
+    // Very conservative safe area inside the actual webpage.
+    // This avoids the browser toolbar area above and Windows taskbar area below.
+    const minTop = 210;
+    const minLeft = 220;
+    const minBottomGap = 130;
+    const minRightGap = 140;
+
+    const left = Math.max(rect.left + EDGE_PAD, minLeft);
+    const right = Math.min(rect.right - EDGE_PAD, window.innerWidth - minRightGap);
+    const top = Math.max(rect.top + EDGE_PAD, minTop);
+    const bottom = Math.min(rect.bottom - EDGE_PAD, window.innerHeight - minBottomGap);
 
     return {
-      left: rect.left + EDGE_PAD,
-      right: rect.right - EDGE_PAD,
-      top: rect.top + EDGE_PAD + topExtra,
-      bottom: rect.bottom - EDGE_PAD - bottomExtra,
-      width: Math.max(1, rect.width - EDGE_PAD*2),
-      height: Math.max(1, rect.height - EDGE_PAD*2 - topExtra - bottomExtra)
+      left,
+      right,
+      top,
+      bottom,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top)
     };
   }
 
   function getCalibrationScreenPoint(p){
     const b = getTaskBounds();
-    const pad = 34; // keeps the clickable dot fully inside the visible browser viewport
     const x = b.left + b.width * p.x;
     const y = b.top + b.height * p.y;
+
+    // Final clamp, leaving the whole clickable target visible.
+    const pad = 60;
     return {
       x: Math.max(pad, Math.min(window.innerWidth - pad, x)),
-      y: Math.max(pad, Math.min(window.innerHeight - pad, y))
+      y: Math.max(180, Math.min(window.innerHeight - 120, y))
     };
   }
 
@@ -1388,7 +1403,7 @@ const DOT_RADIUS = 14;
         window.webgazer.end();
       }
     } catch (e) {
-      console.warn('[WEBGAZER_V8] webgazer.end ignored:', e);
+      console.warn('[WEBGAZER_V11] webgazer.end ignored:', e);
     }
     gazeState = {
       tsPerf: null,
@@ -1406,6 +1421,17 @@ const DOT_RADIUS = 14;
 
   function startGazeCalibrationIntro(){
     if (gazeCalibOverlay) gazeCalibOverlay.style.display = 'flex';
+  }
+
+
+  function positionGazeCalibDot(){
+    const p = GAZE_CALIB_POINTS[gazeCalibIndex];
+    if (!p || !gazeCalibDot || !gazeCalibText) return;
+
+    const sp = getCalibrationScreenPoint(p);
+    gazeCalibDot.style.left = `${sp.x}px`;
+    gazeCalibDot.style.top = `${sp.y}px`;
+    gazeCalibText.textContent = `כיול WebGazer: ${p.label} — לחיצה ${gazeCalibClicks + 1}/${GAZE_CALIB_CLICKS_PER_POINT}`;
   }
 
   function beginGazeCalibration(){
@@ -1466,7 +1492,7 @@ const DOT_RADIUS = 14;
       cameraStatus.style.display = 'block';
       cameraStatus.textContent = msg;
     }
-    console.log('[WEBGAZER_V8]', msg);
+    console.log('[WEBGAZER_V11]', msg);
   }
 
   async function initCameraOnly(){
