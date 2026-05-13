@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Camera Tracking Basic</title>
+  <title>Connect-the-Dots + Camera + Pupil Tracking</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -188,7 +188,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_BASIC_V2_NO_WEBGAZER</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_PUPIL_TRACKING_V1_NO_EXTERNAL_LIBS</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -251,9 +251,10 @@
 </div>
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
-  <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:360px;">
+  <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:420px;">
     CAMERA: waiting
   </div>
+  <canvas id="pupilCanvas" width="180" height="80" style="position:fixed;left:14px;bottom:202px;width:180px;height:80px;z-index:20;display:none;border-radius:14px;border:1px solid rgba(255,255,255,.18);background:#000;"></canvas>
 
 <script type="module">
 (() => {
@@ -313,6 +314,8 @@ const DOT_RADIUS = 14;
 
   const video = document.getElementById('video');
   const cameraStatus = document.getElementById('cameraStatus');
+  const pupilCanvas = document.getElementById('pupilCanvas');
+  const pupilCtx = pupilCanvas ? pupilCanvas.getContext('2d', { willReadFrequently: true }) : null;
 
   // ---- State
   let sessionRunning = false;
@@ -354,6 +357,20 @@ const DOT_RADIUS = 14;
   // Camera / pupil tracking placeholder
   let cameraStream = null;
   let cameraReady = false;
+
+  // ---- Local pupil tracking, no external libraries.
+  // This does NOT yet classify ON/OFF screen; it only verifies that we can track a dark pupil/eye-region signal.
+  let pupilTrackingRunning = false;
+  let pupilRafId = null;
+  let pupilState = {
+    ts: null,
+    found: false,
+    xNorm: null,
+    yNorm: null,
+    confidence: 0,
+    darkPixelCount: 0
+  };
+
   let gazeState = {
     tsPerf: null,
     attention: "WAITING",
@@ -1066,6 +1083,121 @@ const DOT_RADIUS = 14;
     };
   }
 
+
+  function stopPupilTracking(){
+    pupilTrackingRunning = false;
+    if (pupilRafId) cancelAnimationFrame(pupilRafId);
+    pupilRafId = null;
+    if (pupilCanvas) pupilCanvas.style.display = 'none';
+    pupilState = { ts:null, found:false, xNorm:null, yNorm:null, confidence:0, darkPixelCount:0 };
+  }
+
+  function startPupilTracking(){
+    if (!video || !pupilCanvas || !pupilCtx) return;
+    pupilTrackingRunning = true;
+    pupilCanvas.style.display = 'block';
+
+    const step = () => {
+      if (!pupilTrackingRunning || !cameraReady || !video.videoWidth || !video.videoHeight){
+        pupilRafId = requestAnimationFrame(step);
+        return;
+      }
+
+      const vw = video.videoWidth;
+      const vh = video.videoHeight;
+
+      // Approximate eye-band ROI: central upper part of the face image.
+      // This is intentionally simple and local. Later we can replace this with WebGazer/MediaPipe if needed.
+      const roi = {
+        x: Math.round(vw * 0.22),
+        y: Math.round(vh * 0.22),
+        w: Math.round(vw * 0.56),
+        h: Math.round(vh * 0.22)
+      };
+
+      pupilCtx.clearRect(0,0,pupilCanvas.width,pupilCanvas.height);
+      pupilCtx.drawImage(video, roi.x, roi.y, roi.w, roi.h, 0, 0, pupilCanvas.width, pupilCanvas.height);
+
+      const img = pupilCtx.getImageData(0, 0, pupilCanvas.width, pupilCanvas.height);
+      const data = img.data;
+
+      let sumX = 0, sumY = 0, count = 0;
+      let minLum = 255, maxLum = 0;
+
+      // First pass: luminance range in the ROI
+      for (let i=0; i<data.length; i+=4){
+        const lum = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
+        if (lum < minLum) minLum = lum;
+        if (lum > maxLum) maxLum = lum;
+      }
+
+      // Adaptive threshold: pick very dark pixels, but avoid making the entire ROI "pupil"
+      const threshold = Math.min(85, minLum + Math.max(18, (maxLum - minLum) * 0.18));
+
+      for (let y=0; y<pupilCanvas.height; y++){
+        for (let x=0; x<pupilCanvas.width; x++){
+          const idx = (y*pupilCanvas.width + x) * 4;
+          const lum = 0.299*data[idx] + 0.587*data[idx+1] + 0.114*data[idx+2];
+          if (lum <= threshold){
+            sumX += x;
+            sumY += y;
+            count++;
+            // Mark detected dark pixels faintly on the debug canvas
+            data[idx] = 80;
+            data[idx+1] = 170;
+            data[idx+2] = 255;
+          }
+        }
+      }
+
+      pupilCtx.putImageData(img, 0, 0);
+
+      const minCount = 12;
+      const maxCount = pupilCanvas.width * pupilCanvas.height * 0.35;
+      const found = count >= minCount && count <= maxCount;
+
+      if (found){
+        const cx = sumX / count;
+        const cy = sumY / count;
+        const xNorm = cx / pupilCanvas.width;
+        const yNorm = cy / pupilCanvas.height;
+        const confidence = Math.max(0, Math.min(1, count / 450));
+
+        pupilCtx.beginPath();
+        pupilCtx.arc(cx, cy, 7, 0, Math.PI*2);
+        pupilCtx.lineWidth = 2;
+        pupilCtx.strokeStyle = 'rgba(255,255,255,.95)';
+        pupilCtx.stroke();
+
+        pupilState = {
+          ts: Date.now(),
+          found: true,
+          xNorm: Math.round(xNorm * 1000) / 1000,
+          yNorm: Math.round(yNorm * 1000) / 1000,
+          confidence: Math.round(confidence * 1000) / 1000,
+          darkPixelCount: count
+        };
+
+        setCameraStatus(`CAMERA: ON | PUPIL: TRACKING x=${pupilState.xNorm}, y=${pupilState.yNorm}, conf=${pupilState.confidence}`);
+      } else {
+        pupilState = {
+          ts: Date.now(),
+          found: false,
+          xNorm: null,
+          yNorm: null,
+          confidence: 0,
+          darkPixelCount: count
+        };
+        setCameraStatus(`CAMERA: ON | PUPIL: NOT FOUND | darkPixels=${count}`);
+      }
+
+      pupilRafId = requestAnimationFrame(step);
+    };
+
+    pupilRafId = requestAnimationFrame(step);
+  }
+
+
   function setCameraStatus(msg){
     if (cameraStatus){
       cameraStatus.style.display = 'block';
@@ -1104,7 +1236,8 @@ const DOT_RADIUS = 14;
     }
 
     cameraReady = true;
-    setCameraStatus('CAMERA: ON');
+    setCameraStatus('CAMERA: ON | starting pupil tracking...');
+    startPupilTracking();
     gazeState = {
       tsPerf: performance.now(),
       attention: 'CAMERA_ON',
@@ -1116,6 +1249,7 @@ const DOT_RADIUS = 14;
   }
 
   function stopCameraOnly(){
+    stopPupilTracking();
     cameraReady = false;
     try {
       if (cameraStream){
