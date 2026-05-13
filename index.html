@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + WebGazer On/Off Screen Tracking</title>
+  <title>Connect-the-Dots + Camera Tracking Basic</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -141,12 +141,20 @@
 
     .hiddenCam{
       position: fixed;
-      left: -9999px;
-      top: -9999px;
-      width: 1px;
-      height: 1px;
-      opacity: 0;
+      right: 14px;
+      bottom: 14px;
+      width: 160px;
+      height: 120px;
+      object-fit: cover;
+      border-radius: 14px;
+      border: 1px solid rgba(255,255,255,.18);
+      box-shadow: var(--shadow);
+      opacity: .82;
+      z-index: 7;
+      transform: scaleX(-1);
+      background: rgba(0,0,0,.25);
       pointer-events: none;
+      display:none;
     }
 
     @media (max-width: 560px){
@@ -256,7 +264,6 @@
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
 
-<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
 <script type="module">
 (() => {
   // ---- Config
@@ -352,8 +359,9 @@ const DOT_RADIUS = 14;
   let currentTask = null;
   let currentAttempt = null;
 
-  // WebGazer tracking
-  let webgazerReady = false;
+  // Camera / pupil tracking placeholder
+  let cameraStream = null;
+  let cameraReady = false;
   let gazeState = {
     tsPerf: null,
     attention: "WAITING",
@@ -677,10 +685,10 @@ const DOT_RADIUS = 14;
     btnEarly.disabled = true;
 
     try{
-      await initWebgazer();
+      await initCameraOnly();
     } catch (e){
       console.error(e);
-      alert("יש שגיאה בהפעלת המצלמה/מעקב המבט. פתח F12 > Console כדי לראות למה.");
+      alert("יש שגיאה בהפעלת המצלמה. ודא שנתת הרשאה למצלמה ושהעמוד רץ ב-https או localhost.");
       btnStartInline.disabled = false;
       btnEarly.disabled = true;
       return;
@@ -689,7 +697,10 @@ const DOT_RADIUS = 14;
     pendingStartPid = pid;
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
-    calibIntroOverlay.style.display = 'flex';
+
+    // בשלב הזה אנחנו רק מוודאים שהמצלמה נדלקת.
+    // בהמשך נוסיף כאן את לוגיקת ON/OFF SCREEN.
+    finishCalibrationFlow();
   }
 
   async function finish(reason){
@@ -735,7 +746,7 @@ const DOT_RADIUS = 14;
       { filename: `${pidSafe}_point_events_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: pointEventsCsv }
     ];
 
-    stopWebgazer();
+    stopCameraOnly();
 
     // Show overlay immediately (no waiting)
     resetUI({ showPidOverlay: false });
@@ -1014,6 +1025,7 @@ const DOT_RADIUS = 14;
       const h = gazeState || {};
       const onOff = (h.attention === "ON_TASK") ? "ONSCREEN"
                   : (h.attention === "OFF_TASK") ? "OFFSCREEN"
+                  : (h.attention === "CAMERA_ON") ? "CAMERA_ON"
                   : "UNKNOWN";
 
       const timeHundredths = Math.round(tFromSessionMs / 10);
@@ -1062,52 +1074,71 @@ const DOT_RADIUS = 14;
     };
   }
 
-  async function initWebgazer(){
-    if (!window.webgazer) throw new Error('WebGazer failed to load');
-    if (typeof window.webgazer.end === 'function') {
-      try { window.webgazer.end(); } catch {}
-    }
-    if (typeof window.webgazer.clearData === 'function') {
-      try { window.webgazer.clearData(); } catch {}
-    }
-    if (typeof window.webgazer.saveDataAcrossSessions === 'function') {
-      try { window.webgazer.saveDataAcrossSessions(false); } catch {}
-    }
-    if (typeof window.webgazer.showVideoPreview === 'function') {
-      try { window.webgazer.showVideoPreview(false); } catch {}
-    }
-    if (typeof window.webgazer.showPredictionPoints === 'function') {
-      try { window.webgazer.showPredictionPoints(false); } catch {}
-    }
-    if (typeof window.webgazer.showFaceOverlay === 'function') {
-      try { window.webgazer.showFaceOverlay(false); } catch {}
-    }
-    if (typeof window.webgazer.showFaceFeedbackBox === 'function') {
-      try { window.webgazer.showFaceFeedbackBox(false); } catch {}
-    }
-    if (typeof window.webgazer.applyKalmanFilter === 'function') {
-      try { window.webgazer.applyKalmanFilter(true); } catch {}
+  async function initCameraOnly(){
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+      throw new Error('getUserMedia is not supported in this browser');
     }
 
-    window.webgazer.setGazeListener((data) => {
-      setGazeStateFromPrediction(data);
+    // Stop any previous stream before starting a new one
+    stopCameraOnly();
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: 'user',
+        width: { ideal: 640 },
+        height: { ideal: 480 }
+      },
+      audio: false
     });
 
-    await window.webgazer.begin();
-    webgazerReady = true;
+    cameraStream = stream;
+    video.srcObject = stream;
+    video.style.display = 'block';
+
+    await new Promise((resolve, reject) => {
+      const done = () => resolve();
+      const fail = () => reject(new Error('video failed to start'));
+      video.onloadedmetadata = done;
+      video.onerror = fail;
+      try {
+        const playResult = video.play();
+        if (playResult && typeof playResult.then === 'function') {
+          playResult.then(resolve).catch(reject);
+        }
+      } catch (e) { reject(e); }
+      setTimeout(resolve, 1200);
+    });
+
+    cameraReady = true;
+    gazeState = {
+      tsPerf: performance.now(),
+      attention: 'CAMERA_ON',
+      reason: 'CAMERA_ON',
+      x: null,
+      y: null,
+      ok: true
+    };
   }
 
-  function stopWebgazer(){
-    webgazerReady = false;
+  function stopCameraOnly(){
+    cameraReady = false;
     try {
-      if (window.webgazer && typeof window.webgazer.end === 'function') {
-        window.webgazer.end();
+      if (cameraStream){
+        cameraStream.getTracks().forEach(track => track.stop());
+      }
+    } catch {}
+    cameraStream = null;
+    try {
+      if (video){
+        video.pause();
+        video.srcObject = null;
+        video.style.display = 'none';
       }
     } catch {}
     gazeState = {
       tsPerf: null,
-      attention: "WAITING",
-      reason: "WAITING",
+      attention: 'WAITING',
+      reason: 'WAITING',
       x: null,
       y: null,
       ok: false
@@ -1149,9 +1180,7 @@ const DOT_RADIUS = 14;
 
   function recordCalibrationClick(clientX, clientY){
     try {
-      if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function') {
-        window.webgazer.recordScreenPosition(clientX, clientY, 'click');
-      }
+
     } catch {}
   }
 
@@ -1270,7 +1299,6 @@ const DOT_RADIUS = 14;
 
     selectedSet.add(hit);
     connections.push(hit);
-    try{ if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function') window.webgazer.recordScreenPosition(pos.x + cv.getBoundingClientRect().left, pos.y + cv.getBoundingClientRect().top, 'click'); } catch {}
     if (currentAttempt) {
       const rec = currentAttempt.clicks[currentAttempt.clicks.length-1];
       rec.action = 'toggle_on';
