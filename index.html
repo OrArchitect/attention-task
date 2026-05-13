@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V7</title>
+  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V8</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V7_FALLBACK_CONTINUE</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V8_JSPSYCH_FORK</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -269,7 +269,7 @@
   </div>
   <canvas id="pupilCanvas" width="180" height="80" style="display:none;"></canvas>
 
-<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/jspsych/jspsych@jspsych@7.0.0/examples/js/webgazer/webgazer.js"></script>
 <script type="module">
 (() => {
   // ---- Config
@@ -769,7 +769,7 @@ const DOT_RADIUS = 14;
       // Important:
       // WebGazer may fail on GitHub Pages because it tries to load internal FaceMesh/MediaPipe
       // assets from the project folder and receives 404. This must NOT block the experiment.
-      setCameraStatus('WEBGAZER FAILED — task will continue, gaze marked UNKNOWN. Error: ' + (e.name || 'Error') + ' - ' + (e.message || ''));
+      setCameraStatus('WEBGAZER FAILED — task will continue, gaze marked UNKNOWN. This means the WebGazer library did not initialize correctly. Error: ' + (e.name || 'Error') + ' - ' + (e.message || ''));
       updateGazeBadge('UNKNOWN', 'WEBGAZER_FAILED');
     }
 
@@ -1275,7 +1275,7 @@ const DOT_RADIUS = 14;
   }
 
   async function initWebGazerTracking(){
-    setCameraStatus('WEBGAZER: loading / requesting camera permission...');
+    setCameraStatus('WEBGAZER V8 jsPsych fork: loading / requesting camera permission...');
 
     if (!window.webgazer){
       throw new Error('WebGazer failed to load');
@@ -1377,7 +1377,7 @@ const DOT_RADIUS = 14;
         window.webgazer.end();
       }
     } catch (e) {
-      console.warn('[WEBGAZER_V6] webgazer.end ignored:', e);
+      console.warn('[WEBGAZER_V8] webgazer.end ignored:', e);
     }
     gazeState = {
       tsPerf: null,
@@ -1455,7 +1455,7 @@ const DOT_RADIUS = 14;
       cameraStatus.style.display = 'block';
       cameraStatus.textContent = msg;
     }
-    console.log('[WEBGAZER_V6]', msg);
+    console.log('[WEBGAZER_V8]', msg);
   }
 
   async function initCameraOnly(){
