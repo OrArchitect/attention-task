@@ -189,7 +189,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V11_LOWER_CALIBRATION</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V12_WIDER_TASK_CALIBRATION</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -296,7 +296,7 @@ const DOT_RADIUS = 14;
 
 
   const MIN_DIST = 52;
-  const EDGE_PAD = 170; // safe inset for task + calibration; // safe inset: keeps task/calibration away from browser edges; inset for clickable calibration points
+  const EDGE_PAD = 105; // wider but still safe inset for task + calibration; // safe inset for task + calibration; // safe inset: keeps task/calibration away from browser edges; inset for clickable calibration points
   const MAX_TRIES = 5000;
 
   // Timeline sampling
@@ -404,15 +404,15 @@ const DOT_RADIUS = 14;
 
   let gazeCalibration = null;
   const GAZE_CALIB_POINTS = [
-    {x:0.18,y:0.18,label:'שמאל למעלה'},
-    {x:0.50,y:0.18,label:'למעלה במרכז'},
-    {x:0.82,y:0.18,label:'ימין למעלה'},
-    {x:0.18,y:0.50,label:'שמאל במרכז'},
+    {x:0.04,y:0.08,label:'שמאל למעלה'},
+    {x:0.50,y:0.08,label:'למעלה במרכז'},
+    {x:0.96,y:0.08,label:'ימין למעלה'},
+    {x:0.04,y:0.50,label:'שמאל במרכז'},
     {x:0.50,y:0.50,label:'מרכז המסך'},
-    {x:0.82,y:0.50,label:'ימין במרכז'},
-    {x:0.18,y:0.82,label:'שמאל למטה'},
-    {x:0.50,y:0.82,label:'למטה במרכז'},
-    {x:0.82,y:0.82,label:'ימין למטה'}
+    {x:0.96,y:0.50,label:'ימין במרכז'},
+    {x:0.04,y:0.92,label:'שמאל למטה'},
+    {x:0.50,y:0.92,label:'למטה במרכז'},
+    {x:0.96,y:0.92,label:'ימין למטה'}
   ];
   const GAZE_CALIB_CLICKS_PER_POINT = 4;
   let gazeCalibIndex = 0;
@@ -467,10 +467,10 @@ const DOT_RADIUS = 14;
 
     // Very conservative safe area inside the actual webpage.
     // This avoids the browser toolbar area above and Windows taskbar area below.
-    const minTop = 210;
-    const minLeft = 220;
-    const minBottomGap = 130;
-    const minRightGap = 140;
+    const minTop = 165;
+    const minLeft = 120;
+    const minBottomGap = 95;
+    const minRightGap = 80;
 
     const left = Math.max(rect.left + EDGE_PAD, minLeft);
     const right = Math.min(rect.right - EDGE_PAD, window.innerWidth - minRightGap);
@@ -493,10 +493,10 @@ const DOT_RADIUS = 14;
     const y = b.top + b.height * p.y;
 
     // Final clamp, leaving the whole clickable target visible.
-    const pad = 60;
+    const pad = 45;
     return {
-      x: Math.max(pad, Math.min(window.innerWidth - pad, x)),
-      y: Math.max(180, Math.min(window.innerHeight - 120, y))
+      x: Math.max(45, Math.min(window.innerWidth - 45, x)),
+      y: Math.max(145, Math.min(window.innerHeight - 90, y))
     };
   }
 
@@ -1403,7 +1403,7 @@ const DOT_RADIUS = 14;
         window.webgazer.end();
       }
     } catch (e) {
-      console.warn('[WEBGAZER_V11] webgazer.end ignored:', e);
+      console.warn('[WEBGAZER_V12] webgazer.end ignored:', e);
     }
     gazeState = {
       tsPerf: null,
@@ -1492,7 +1492,7 @@ const DOT_RADIUS = 14;
       cameraStatus.style.display = 'block';
       cameraStatus.textContent = msg;
     }
-    console.log('[WEBGAZER_V11]', msg);
+    console.log('[WEBGAZER_V12]', msg);
   }
 
   async function initCameraOnly(){
@@ -1707,3 +1707,4 @@ const DOT_RADIUS = 14;
 </script>
 </body>
 </html>
+
