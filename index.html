@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Camera + Pupil Tracking</title>
+  <title>Connect-the-Dots + Camera ON/OFF Tracking</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -188,7 +188,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_PUPIL_TRACKING_V1_NO_EXTERNAL_LIBS</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_ONOFF_V1_PUPIL_CALIBRATION</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -249,6 +249,23 @@
   </div>
 </div>
 </div>
+
+
+  <div id="gazeCalibOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
+    <div class="card">
+      <h2>כיול קצר למעקב מבט</h2>
+      <p>בשלב הבא תופיע נקודה כחולה על המסך. הסתכלו על הנקודה ולחצו עליה 3 פעמים בכל מיקום. הכיול נועד להבחין בין מבט על המסך לבין מבט מחוץ למסך.</p>
+      <div class="actions">
+        <button id="btnGazeCalibBegin" class="btn">התחל כיול</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="gazeCalibStage" style="position:fixed;inset:0;z-index:30;display:none;pointer-events:none;">
+    <div id="gazeCalibDot" style="position:absolute;width:26px;height:26px;border-radius:999px;background:#7aaaff;box-shadow:0 0 0 8px rgba(122,170,255,.20);transform:translate(-50%,-50%);cursor:pointer;pointer-events:auto;"></div>
+    <div id="gazeCalibText" style="position:fixed;left:50%;top:18px;transform:translateX(-50%);background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:10px 16px;color:#e6eaf2;font-size:14px;">Calibration</div>
+  </div>
+
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
   <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:420px;">
@@ -313,6 +330,11 @@ const DOT_RADIUS = 14;
   const calibDot = null;
 
   const video = document.getElementById('video');
+  const gazeCalibOverlay = document.getElementById('gazeCalibOverlay');
+  const btnGazeCalibBegin = document.getElementById('btnGazeCalibBegin');
+  const gazeCalibStage = document.getElementById('gazeCalibStage');
+  const gazeCalibDot = document.getElementById('gazeCalibDot');
+  const gazeCalibText = document.getElementById('gazeCalibText');
   const cameraStatus = document.getElementById('cameraStatus');
   const pupilCanvas = document.getElementById('pupilCanvas');
   const pupilCtx = pupilCanvas ? pupilCanvas.getContext('2d', { willReadFrequently: true }) : null;
@@ -371,13 +393,30 @@ const DOT_RADIUS = 14;
     darkPixelCount: 0
   };
 
+  let gazeCalibration = null;
+  const GAZE_CALIB_POINTS = [
+    {x:0.50,y:0.50,label:'מרכז המסך'},
+    {x:0.15,y:0.15,label:'שמאל למעלה'},
+    {x:0.85,y:0.15,label:'ימין למעלה'},
+    {x:0.15,y:0.85,label:'שמאל למטה'},
+    {x:0.85,y:0.85,label:'ימין למטה'}
+  ];
+  const GAZE_CALIB_CLICKS_PER_POINT = 3;
+  let gazeCalibIndex = 0;
+  let gazeCalibClicks = 0;
+  let gazeCalibSamples = [];
+
   let gazeState = {
     tsPerf: null,
     attention: "WAITING",
     reason: "WAITING",
     x: null,
     y: null,
-    ok: false
+    ok: false,
+    pupilFound: false,
+    xNorm: null,
+    yNorm: null,
+    confidence: 0
   };
   let pendingStartPid = null;
   const CALIB_POINTS = [
@@ -707,9 +746,7 @@ const DOT_RADIUS = 14;
     pidEl.disabled = true;
     pidOverlay.style.display = 'none';
 
-    // בשלב הזה אנחנו רק מוודאים שהמצלמה נדלקת.
-    // בהמשך נוסיף כאן את לוגיקת ON/OFF SCREEN.
-    finishCalibrationFlow();
+    startGazeCalibrationIntro();
   }
 
   async function finish(reason){
@@ -824,6 +861,10 @@ const DOT_RADIUS = 14;
     if (calibIntroOverlay) calibIntroOverlay.style.display = 'none';
     if (calibStage) calibStage.style.display = 'none';
     pendingStartPid = null;
+    gazeCalibration = null;
+    gazeCalibSamples = [];
+    if (gazeCalibOverlay) gazeCalibOverlay.style.display = 'none';
+    if (gazeCalibStage) gazeCalibStage.style.display = 'none';
 
     draw();
   }
@@ -954,10 +995,10 @@ const DOT_RADIUS = 14;
         byTask.set(key, {
           taskNumber: key,
           totalTimePerTaskMs: 0,
-          offscreenEventCount: 0,
-          totalOffscreenMs: 0,
-          totalOnscreenMs: 0,
-          unknownMs: 0
+          onTimeMs: 0,
+          offTimeMs: 0,
+          unknownTimeMs: 0,
+          offEvents: 0
         });
       }
       return byTask.get(key);
@@ -969,53 +1010,83 @@ const DOT_RADIUS = 14;
       if (typeof t.durationMs === "number") rec.totalTimePerTaskMs = t.durationMs;
     }
 
+    const maxTaskMs = new Map();
+    for (const r of timeline){
+      const taskKey = String(r.taskNumber ?? "");
+      const v = Number(r.tFromTaskMs);
+      if (!Number.isFinite(v)) continue;
+      maxTaskMs.set(taskKey, Math.max(maxTaskMs.get(taskKey) ?? 0, v));
+    }
+    for (const [taskKey, mx] of maxTaskMs.entries()){
+      const rec = ensureTask(taskKey);
+      if (!rec.totalTimePerTaskMs || rec.totalTimePerTaskMs === 0){
+        rec.totalTimePerTaskMs = mx;
+      }
+    }
+
     const stateByTask = new Map();
     for (const r of timeline){
       const taskKey = String(r.taskNumber ?? "");
       if (!taskKey) continue;
+
       const rec = ensureTask(taskKey);
-      const onoff = String(r["onScreen/Offscreen"] || "UNKNOWN");
+      const onoff = String(r["onScreen/Offscreen"] || "");
       const st = stateByTask.get(taskKey) ?? { wasOff:false };
 
-      if (onoff === "OFFSCREEN"){
-        rec.totalOffscreenMs += TIMELINE_DT_MS;
-        if (!st.wasOff) rec.offscreenEventCount += 1;
-        st.wasOff = true;
+      if (onoff === "ONSCREEN"){
+        rec.onTimeMs += TIMELINE_DT_MS;
+        st.wasOff = false;
+      } else if (onoff === "OFFSCREEN"){
+        rec.offTimeMs += TIMELINE_DT_MS;
+        if (!st.wasOff){
+          rec.offEvents += 1;
+          st.wasOff = true;
+        }
       } else {
-        if (onoff === "ONSCREEN") rec.totalOnscreenMs += TIMELINE_DT_MS;
-        else rec.unknownMs += TIMELINE_DT_MS;
+        rec.unknownTimeMs += TIMELINE_DT_MS;
         st.wasOff = false;
       }
+
       stateByTask.set(taskKey, st);
     }
 
     const header = [
       "taskNumber",
-      "totalTimePerTaskMs",
-      "offscreenEventCount",
-      "totalOffscreenMs",
-      "totalOnscreenMs",
-      "unknownGazeMs",
-      "offscreenPercent"
+      "TOTAL TIME PER TASK MS",
+      "TOTAL TIME ONSCREEN MS",
+      "TOTAL TIME OFFSCREEN MS",
+      "TOTAL TIME UNKNOWN MS",
+      "NO OF OFFSCREEN EVENTS"
     ];
+
     const rows = [header];
 
-    const sorted = [...byTask.values()].sort((a,b) => Number(a.taskNumber) - Number(b.taskNumber));
+    const sorted = [...byTask.values()].sort((a,b) => {
+      const A = Number(a.taskNumber), B = Number(b.taskNumber);
+      if (Number.isFinite(A) && Number.isFinite(B)) return A - B;
+      return String(a.taskNumber).localeCompare(String(b.taskNumber));
+    });
+
     for (const t of sorted){
       if (!t.taskNumber) continue;
-      const denom = t.totalOffscreenMs + t.totalOnscreenMs;
       rows.push([
         t.taskNumber,
         t.totalTimePerTaskMs,
-        t.offscreenEventCount,
-        t.totalOffscreenMs,
-        t.totalOnscreenMs,
-        t.unknownMs,
-        denom > 0 ? Math.round((t.totalOffscreenMs / denom) * 10000) / 100 : ''
+        t.onTimeMs,
+        t.offTimeMs,
+        t.unknownTimeMs,
+        t.offEvents
       ]);
     }
 
-    return rowsToCSV(rows);
+    const esc = (v) => {
+      const s = String(v ?? "");
+      if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+      return s;
+    };
+
+    const csv = rows.map(r => r.map(esc).join(",")).join("\r\n");
+    return "\uFEFF" + csv;
   }
 
   // ---- TIMELINE sampling
@@ -1084,6 +1155,145 @@ const DOT_RADIUS = 14;
   }
 
 
+
+  function classifyGazeFromPupil(){
+    if (!pupilState || !pupilState.found){
+      gazeState = {
+        tsPerf: performance.now(),
+        attention: "UNKNOWN",
+        reason: "PUPIL_NOT_FOUND",
+        x: null,
+        y: null,
+        ok: false,
+        pupilFound: false,
+        xNorm: null,
+        yNorm: null,
+        confidence: 0
+      };
+      return;
+    }
+
+    if (!gazeCalibration){
+      gazeState = {
+        tsPerf: performance.now(),
+        attention: "UNKNOWN",
+        reason: "NOT_CALIBRATED",
+        x: null,
+        y: null,
+        ok: true,
+        pupilFound: true,
+        xNorm: pupilState.xNorm,
+        yNorm: pupilState.yNorm,
+        confidence: pupilState.confidence
+      };
+      return;
+    }
+
+    const x = pupilState.xNorm;
+    const y = pupilState.yNorm;
+    const on = x >= gazeCalibration.minX && x <= gazeCalibration.maxX &&
+               y >= gazeCalibration.minY && y <= gazeCalibration.maxY;
+
+    gazeState = {
+      tsPerf: performance.now(),
+      attention: on ? "ON_TASK" : "OFF_TASK",
+      reason: on ? "ONSCREEN" : "OFFSCREEN",
+      x: x,
+      y: y,
+      ok: true,
+      pupilFound: true,
+      xNorm: x,
+      yNorm: y,
+      confidence: pupilState.confidence
+    };
+  }
+
+  function positionGazeCalibDot(){
+    const p = GAZE_CALIB_POINTS[gazeCalibIndex];
+    if (!p || !gazeCalibDot || !gazeCalibText) return;
+    gazeCalibDot.style.left = `${window.innerWidth * p.x}px`;
+    gazeCalibDot.style.top = `${window.innerHeight * p.y}px`;
+    gazeCalibText.textContent = `כיול מבט: ${p.label} — לחיצה ${gazeCalibClicks + 1}/${GAZE_CALIB_CLICKS_PER_POINT}`;
+  }
+
+  function startGazeCalibrationIntro(){
+    if (gazeCalibOverlay) gazeCalibOverlay.style.display = 'flex';
+  }
+
+  function beginGazeCalibration(){
+    gazeCalibration = null;
+    gazeCalibIndex = 0;
+    gazeCalibClicks = 0;
+    gazeCalibSamples = [];
+    if (gazeCalibOverlay) gazeCalibOverlay.style.display = 'none';
+    if (gazeCalibStage) gazeCalibStage.style.display = 'block';
+    positionGazeCalibDot();
+  }
+
+  function finishGazeCalibration(){
+    if (gazeCalibStage) gazeCalibStage.style.display = 'none';
+
+    const valid = gazeCalibSamples.filter(s => s && s.found && Number.isFinite(s.xNorm) && Number.isFinite(s.yNorm));
+    if (valid.length < 5){
+      gazeCalibration = null;
+      alert('הכיול לא הצליח לזהות מספיק דגימות אישון. נתחיל את המשימה בכל זאת, אך נתוני ON/OFF יסומנו כ-UNKNOWN עד כיול תקין.');
+    } else {
+      const xs = valid.map(s => s.xNorm);
+      const ys = valid.map(s => s.yNorm);
+
+      // Margin around calibrated on-screen pupil range.
+      // Larger margin = less false OFFSCREEN; smaller margin = stricter classification.
+      const marginX = Math.max(0.08, (Math.max(...xs) - Math.min(...xs)) * 0.45);
+      const marginY = Math.max(0.08, (Math.max(...ys) - Math.min(...ys)) * 0.45);
+
+      gazeCalibration = {
+        minX: Math.max(0, Math.min(...xs) - marginX),
+        maxX: Math.min(1, Math.max(...xs) + marginX),
+        minY: Math.max(0, Math.min(...ys) - marginY),
+        maxY: Math.min(1, Math.max(...ys) + marginY),
+        sampleCount: valid.length
+      };
+    }
+
+    finishCalibrationFlow();
+  }
+
+  function recordGazeCalibrationClick(){
+    if (pupilState && pupilState.found){
+      gazeCalibSamples.push({
+        pointIndex: gazeCalibIndex,
+        clickIndex: gazeCalibClicks + 1,
+        xNorm: pupilState.xNorm,
+        yNorm: pupilState.yNorm,
+        confidence: pupilState.confidence,
+        found: true
+      });
+    } else {
+      gazeCalibSamples.push({
+        pointIndex: gazeCalibIndex,
+        clickIndex: gazeCalibClicks + 1,
+        xNorm: null,
+        yNorm: null,
+        confidence: 0,
+        found: false
+      });
+    }
+
+    gazeCalibClicks += 1;
+    if (gazeCalibClicks >= GAZE_CALIB_CLICKS_PER_POINT){
+      gazeCalibIndex += 1;
+      gazeCalibClicks = 0;
+      if (gazeCalibIndex >= GAZE_CALIB_POINTS.length){
+        finishGazeCalibration();
+      } else {
+        positionGazeCalibDot();
+      }
+    } else {
+      positionGazeCalibDot();
+    }
+  }
+
+
   function stopPupilTracking(){
     pupilTrackingRunning = false;
     if (pupilRafId) cancelAnimationFrame(pupilRafId);
@@ -1099,7 +1309,8 @@ const DOT_RADIUS = 14;
 
     const step = () => {
       if (!pupilTrackingRunning || !cameraReady || !video.videoWidth || !video.videoHeight){
-        pupilRafId = requestAnimationFrame(step);
+        classifyGazeFromPupil();
+      pupilRafId = requestAnimationFrame(step);
         return;
       }
 
@@ -1178,7 +1389,7 @@ const DOT_RADIUS = 14;
           darkPixelCount: count
         };
 
-        setCameraStatus(`CAMERA: ON | PUPIL: TRACKING x=${pupilState.xNorm}, y=${pupilState.yNorm}, conf=${pupilState.confidence}`);
+        setCameraStatus(`CAMERA: ON | PUPIL: TRACKING | GAZE: ${gazeState.reason || 'CALIBRATING'} | x=${pupilState.xNorm}, y=${pupilState.yNorm}, conf=${pupilState.confidence}`);
       } else {
         pupilState = {
           ts: Date.now(),
@@ -1188,7 +1399,7 @@ const DOT_RADIUS = 14;
           confidence: 0,
           darkPixelCount: count
         };
-        setCameraStatus(`CAMERA: ON | PUPIL: NOT FOUND | darkPixels=${count}`);
+        setCameraStatus(`CAMERA: ON | PUPIL: NOT FOUND | GAZE: UNKNOWN | darkPixels=${count}`);
       }
 
       pupilRafId = requestAnimationFrame(step);
@@ -1343,6 +1554,16 @@ const DOT_RADIUS = 14;
   if (btnCalibBegin){
     btnCalibBegin.addEventListener('click', () => startCalibrationFlow());
   }
+  if (btnGazeCalibBegin){
+    btnGazeCalibBegin.addEventListener('click', () => beginGazeCalibration());
+  }
+  if (gazeCalibDot){
+    gazeCalibDot.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      recordGazeCalibrationClick();
+    });
+  }
   if (calibDot){
     calibDot.addEventListener('click', (e) => {
       e.preventDefault();
@@ -1459,7 +1680,7 @@ const DOT_RADIUS = 14;
   cv.addEventListener('mousedown', onPointerDown);
   cv.addEventListener('touchstart', onPointerDown, { passive:false });
 
-  window.addEventListener('resize', () => { resizeCanvas(); if (calibStage.style.display === 'block') positionCalibDot(); });
+  window.addEventListener('resize', () => { resizeCanvas(); if (calibStage && calibStage.style.display === 'block') positionCalibDot(); if (gazeCalibStage && gazeCalibStage.style.display === 'block') positionGazeCalibDot(); });
 
   // init
   resizeCanvas();
