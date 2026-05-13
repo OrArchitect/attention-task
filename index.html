@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_ONOFF_V2_HIDDEN_CAMERA_9PT_CALIBRATION</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_ONOFF_V3_STRICT_CALIBRATION</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -1188,6 +1188,23 @@ const DOT_RADIUS = 14;
 
     const x = pupilState.xNorm;
     const y = pupilState.yNorm;
+
+    // If detection is too weak, avoid false ONSCREEN classification.
+    if (!Number.isFinite(x) || !Number.isFinite(y) || pupilState.confidence < 0.03){
+      gazeState = {
+        tsPerf: performance.now(),
+        attention: "UNKNOWN",
+        reason: "LOW_CONFIDENCE",
+        x, y,
+        ok: false,
+        pupilFound: true,
+        xNorm: x,
+        yNorm: y,
+        confidence: pupilState.confidence
+      };
+      return;
+    }
+
     const on = x >= gazeCalibration.minX && x <= gazeCalibration.maxX &&
                y >= gazeCalibration.minY && y <= gazeCalibration.maxY;
 
@@ -1235,23 +1252,39 @@ const DOT_RADIUS = 14;
       gazeCalibration = null;
       alert('הכיול לא הצליח לזהות מספיק דגימות אישון. נתחיל את המשימה בכל זאת, אך נתוני ON/OFF יסומנו כ-UNKNOWN עד כיול תקין.');
     } else {
-      const xs = valid.map(s => s.xNorm);
-      const ys = valid.map(s => s.yNorm);
+      const xs = valid.map(s => s.xNorm).sort((a,b)=>a-b);
+      const ys = valid.map(s => s.yNorm).sort((a,b)=>a-b);
 
-      // Margin around calibrated on-screen pupil range.
-      // Larger margin = less false OFFSCREEN; smaller margin = stricter classification.
-      const marginX = Math.max(0.08, (Math.max(...xs) - Math.min(...xs)) * 0.45);
-      const marginY = Math.max(0.08, (Math.max(...ys) - Math.min(...ys)) * 0.45);
+      function q(arr, p){
+        if (!arr.length) return null;
+        const idx = Math.max(0, Math.min(arr.length - 1, Math.round((arr.length - 1) * p)));
+        return arr[idx];
+      }
+
+      // Use percentile range to reduce the influence of noisy calibration samples.
+      const xLow = q(xs, 0.10);
+      const xHigh = q(xs, 0.90);
+      const yLow = q(ys, 0.10);
+      const yHigh = q(ys, 0.90);
+
+      const rangeX = Math.max(0.001, xHigh - xLow);
+      const rangeY = Math.max(0.001, yHigh - yLow);
+
+      // Strict margin: enough tolerance for noise, but not so wide that looking away is still counted as on-screen.
+      const marginX = Math.max(0.025, rangeX * 0.18);
+      const marginY = Math.max(0.025, rangeY * 0.18);
 
       gazeCalibration = {
-        minX: Math.max(0, Math.min(...xs) - marginX),
-        maxX: Math.min(1, Math.max(...xs) + marginX),
-        minY: Math.max(0, Math.min(...ys) - marginY),
-        maxY: Math.min(1, Math.max(...ys) + marginY),
+        minX: Math.max(0, xLow - marginX),
+        maxX: Math.min(1, xHigh + marginX),
+        minY: Math.max(0, yLow - marginY),
+        maxY: Math.min(1, yHigh + marginY),
+        xLow, xHigh, yLow, yHigh,
+        marginX, marginY,
         sampleCount: valid.length,
         createdAtISO: new Date().toISOString()
       };
-      setCameraStatus(`CALIBRATED | xRange=${gazeCalibration.minX.toFixed(3)}-${gazeCalibration.maxX.toFixed(3)} | yRange=${gazeCalibration.minY.toFixed(3)}-${gazeCalibration.maxY.toFixed(3)} | samples=${gazeCalibration.sampleCount}`);
+      setCameraStatus(`CALIBRATED STRICT | xRange=${gazeCalibration.minX.toFixed(3)}-${gazeCalibration.maxX.toFixed(3)} | yRange=${gazeCalibration.minY.toFixed(3)}-${gazeCalibration.maxY.toFixed(3)} | samples=${gazeCalibration.sampleCount}`);
     }
 
     finishCalibrationFlow();
@@ -1308,8 +1341,7 @@ const DOT_RADIUS = 14;
 
     const step = () => {
       if (!pupilTrackingRunning || !cameraReady || !video.videoWidth || !video.videoHeight){
-        classifyGazeFromPupil();
-      pupilRafId = requestAnimationFrame(step);
+        pupilRafId = requestAnimationFrame(step);
         return;
       }
 
@@ -1388,6 +1420,7 @@ const DOT_RADIUS = 14;
           darkPixelCount: count
         };
 
+        classifyGazeFromPupil();
         setCameraStatus(`CAMERA: ON | PUPIL: TRACKING | GAZE: ${gazeState.reason || 'CALIBRATING'} | x=${pupilState.xNorm}, y=${pupilState.yNorm}, conf=${pupilState.confidence}`);
       } else {
         pupilState = {
@@ -1398,6 +1431,7 @@ const DOT_RADIUS = 14;
           confidence: 0,
           darkPixelCount: count
         };
+        classifyGazeFromPupil();
         setCameraStatus(`CAMERA: ON | PUPIL: NOT FOUND | GAZE: UNKNOWN | darkPixels=${count}`);
       }
 
