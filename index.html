@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Connect-the-Dots + Camera ON/OFF Tracking V2</title>
+  <title>Connect-the-Dots + WebGazer ON/OFF Tracking V4</title>
   <style>
     :root{
       --bg:#0b1220;
@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_ONOFF_V3_STRICT_CALIBRATION</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V4_ALIGNED_TASK_BOUNDS</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -246,8 +246,8 @@
 
   <div id="gazeCalibOverlay" class="overlay" role="dialog" aria-modal="true" style="display:none;">
     <div class="card">
-      <h2>כיול גבולות המסך</h2>
-      <p>בשלב הבא תופיע נקודה כחולה ב־9 מיקומים על המסך. בכל מיקום הסתכלו על הנקודה ולחצו עליה 3 פעמים. כך המערכת לומדת את טווח תנועת האישון כאשר המבט נמצא בתוך גבולות המסך.</p>
+      <h2>כיול WebGazer לגבולות אזור המשימה</h2>
+      <p>בבשלב הבא תופיע נקודה כחולה ב־9 מיקומים, באותם גבולות שבהם יופיעו נקודות המשימה. הסתכלו על הנקודה ולחצו עליה 4 פעמים בכל מיקום. הכיול מלמד את WebGazer למפות את המבט לקואורדינטות המסך.</p>
       <div class="actions">
         <button id="btnGazeCalibBegin" class="btn">התחל כיול</button>
       </div>
@@ -262,10 +262,11 @@
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
   <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:420px;">
-    CAMERA: waiting
+    WEBGAZER: waiting
   </div>
-  <canvas id="pupilCanvas" width="180" height="80" style="position:fixed;left:14px;bottom:202px;width:180px;height:80px;z-index:20;display:none;border-radius:14px;border:1px solid rgba(255,255,255,.18);background:#000;"></canvas>
+  <canvas id="pupilCanvas" width="180" height="80" style="display:none;"></canvas>
 
+<script src="https://webgazer.cs.brown.edu/webgazer.js"></script>
 <script type="module">
 (() => {
   // ---- Config
@@ -284,7 +285,7 @@ const DOT_RADIUS = 14;
 
 
   const MIN_DIST = 52;
-  const EDGE_PAD = 28;
+  const EDGE_PAD = 72; // aligned with calibration bounds
   const MAX_TRIES = 5000;
 
   // Timeline sampling
@@ -388,17 +389,17 @@ const DOT_RADIUS = 14;
 
   let gazeCalibration = null;
   const GAZE_CALIB_POINTS = [
+    {x:0.00,y:0.00,label:'שמאל למעלה'},
+    {x:0.50,y:0.00,label:'למעלה במרכז'},
+    {x:1.00,y:0.00,label:'ימין למעלה'},
+    {x:0.00,y:0.50,label:'שמאל במרכז'},
     {x:0.50,y:0.50,label:'מרכז המסך'},
-    {x:0.10,y:0.10,label:'שמאל למעלה'},
-    {x:0.50,y:0.10,label:'למעלה במרכז'},
-    {x:0.90,y:0.10,label:'ימין למעלה'},
-    {x:0.10,y:0.50,label:'שמאל במרכז'},
-    {x:0.90,y:0.50,label:'ימין במרכז'},
-    {x:0.10,y:0.90,label:'שמאל למטה'},
-    {x:0.50,y:0.90,label:'למטה במרכז'},
-    {x:0.90,y:0.90,label:'ימין למטה'}
+    {x:1.00,y:0.50,label:'ימין במרכז'},
+    {x:0.00,y:1.00,label:'שמאל למטה'},
+    {x:0.50,y:1.00,label:'למטה במרכז'},
+    {x:1.00,y:1.00,label:'ימין למטה'}
   ];
-  const GAZE_CALIB_CLICKS_PER_POINT = 3;
+  const GAZE_CALIB_CLICKS_PER_POINT = 4;
   let gazeCalibIndex = 0;
   let gazeCalibClicks = 0;
   let gazeCalibSamples = [];
@@ -444,6 +445,26 @@ const DOT_RADIUS = 14;
 
   function isoStamp(){
     return new Date().toISOString().replace(/[:.]/g,'-');
+  }
+
+  function getTaskBounds(){
+    const rect = cv.getBoundingClientRect();
+    return {
+      left: rect.left + EDGE_PAD,
+      right: rect.right - EDGE_PAD,
+      top: rect.top + EDGE_PAD,
+      bottom: rect.bottom - EDGE_PAD,
+      width: Math.max(1, rect.width - EDGE_PAD*2),
+      height: Math.max(1, rect.height - EDGE_PAD*2)
+    };
+  }
+
+  function getCalibrationScreenPoint(p){
+    const b = getTaskBounds();
+    return {
+      x: b.left + b.width * p.x,
+      y: b.top + b.height * p.y
+    };
   }
 
   // ---- beforeunload warning (ONLY during active session)
@@ -1153,12 +1174,15 @@ const DOT_RADIUS = 14;
 
 
 
-  function classifyGazeFromPupil(){
-    if (!pupilState || !pupilState.found){
+
+  function classifyGazeFromPrediction(data){
+    const now = performance.now();
+
+    if (!data || typeof data.x !== 'number' || typeof data.y !== 'number' || !Number.isFinite(data.x) || !Number.isFinite(data.y)){
       gazeState = {
-        tsPerf: performance.now(),
+        tsPerf: now,
         attention: "UNKNOWN",
-        reason: "PUPIL_NOT_FOUND",
+        reason: "NO_PREDICTION",
         x: null,
         y: null,
         ok: false,
@@ -1170,64 +1194,79 @@ const DOT_RADIUS = 14;
       return;
     }
 
-    if (!gazeCalibration){
-      gazeState = {
-        tsPerf: performance.now(),
-        attention: "UNKNOWN",
-        reason: "NOT_CALIBRATED",
-        x: null,
-        y: null,
-        ok: true,
-        pupilFound: true,
-        xNorm: pupilState.xNorm,
-        yNorm: pupilState.yNorm,
-        confidence: pupilState.confidence
-      };
-      return;
-    }
+    const b = getTaskBounds();
+    const tolerancePx = 45;
 
-    const x = pupilState.xNorm;
-    const y = pupilState.yNorm;
-
-    // If detection is too weak, avoid false ONSCREEN classification.
-    if (!Number.isFinite(x) || !Number.isFinite(y) || pupilState.confidence < 0.03){
-      gazeState = {
-        tsPerf: performance.now(),
-        attention: "UNKNOWN",
-        reason: "LOW_CONFIDENCE",
-        x, y,
-        ok: false,
-        pupilFound: true,
-        xNorm: x,
-        yNorm: y,
-        confidence: pupilState.confidence
-      };
-      return;
-    }
-
-    const on = x >= gazeCalibration.minX && x <= gazeCalibration.maxX &&
-               y >= gazeCalibration.minY && y <= gazeCalibration.maxY;
+    const inside = data.x >= (b.left - tolerancePx) && data.x <= (b.right + tolerancePx) &&
+                   data.y >= (b.top - tolerancePx) && data.y <= (b.bottom + tolerancePx);
 
     gazeState = {
-      tsPerf: performance.now(),
-      attention: on ? "ON_TASK" : "OFF_TASK",
-      reason: on ? "ONSCREEN" : "OFFSCREEN",
-      x: x,
-      y: y,
+      tsPerf: now,
+      attention: inside ? "ON_TASK" : "OFF_TASK",
+      reason: inside ? "ONSCREEN" : "OFFSCREEN",
+      x: Math.round(data.x),
+      y: Math.round(data.y),
       ok: true,
       pupilFound: true,
-      xNorm: x,
-      yNorm: y,
-      confidence: pupilState.confidence
+      xNorm: Math.round(((data.x - b.left) / b.width) * 1000) / 1000,
+      yNorm: Math.round(((data.y - b.top) / b.height) * 1000) / 1000,
+      confidence: 1
     };
+
+    setCameraStatus(`WEBGAZER: ${gazeState.reason} | x=${gazeState.x}, y=${gazeState.y}`);
   }
 
-  function positionGazeCalibDot(){
-    const p = GAZE_CALIB_POINTS[gazeCalibIndex];
-    if (!p || !gazeCalibDot || !gazeCalibText) return;
-    gazeCalibDot.style.left = `${window.innerWidth * p.x}px`;
-    gazeCalibDot.style.top = `${window.innerHeight * p.y}px`;
-    gazeCalibText.textContent = `כיול מבט: ${p.label} — לחיצה ${gazeCalibClicks + 1}/${GAZE_CALIB_CLICKS_PER_POINT}`;
+  async function initWebGazerTracking(){
+    setCameraStatus('WEBGAZER: loading / requesting camera permission...');
+
+    if (!window.webgazer){
+      throw new Error('WebGazer failed to load');
+    }
+
+    try {
+      if (typeof window.webgazer.end === 'function') {
+        try { window.webgazer.end(); } catch {}
+      }
+      if (typeof window.webgazer.clearData === 'function') {
+        try { window.webgazer.clearData(); } catch {}
+      }
+      if (typeof window.webgazer.saveDataAcrossSessions === 'function') {
+        window.webgazer.saveDataAcrossSessions(false);
+      }
+      if (typeof window.webgazer.showVideoPreview === 'function') window.webgazer.showVideoPreview(false);
+      if (typeof window.webgazer.showPredictionPoints === 'function') window.webgazer.showPredictionPoints(false);
+      if (typeof window.webgazer.showFaceOverlay === 'function') window.webgazer.showFaceOverlay(false);
+      if (typeof window.webgazer.showFaceFeedbackBox === 'function') window.webgazer.showFaceFeedbackBox(false);
+      if (typeof window.webgazer.applyKalmanFilter === 'function') window.webgazer.applyKalmanFilter(true);
+
+      window.webgazer.setGazeListener((data) => classifyGazeFromPrediction(data));
+      await window.webgazer.begin();
+
+      cameraReady = true;
+      setCameraStatus('WEBGAZER: ON | ready for calibration');
+    } catch (err) {
+      setCameraStatus('WEBGAZER ERROR: ' + (err.name || 'Error') + ' - ' + (err.message || ''));
+      throw err;
+    }
+  }
+
+  function stopWebGazerTracking(){
+    cameraReady = false;
+    try {
+      if (window.webgazer && typeof window.webgazer.end === 'function') window.webgazer.end();
+    } catch {}
+    gazeState = {
+      tsPerf: null,
+      attention: "WAITING",
+      reason: "WAITING",
+      x: null,
+      y: null,
+      ok: false,
+      pupilFound: false,
+      xNorm: null,
+      yNorm: null,
+      confidence: 0
+    };
   }
 
   function startGazeCalibrationIntro(){
@@ -1235,7 +1274,6 @@ const DOT_RADIUS = 14;
   }
 
   function beginGazeCalibration(){
-    gazeCalibration = null;
     gazeCalibIndex = 0;
     gazeCalibClicks = 0;
     gazeCalibSamples = [];
@@ -1246,70 +1284,28 @@ const DOT_RADIUS = 14;
 
   function finishGazeCalibration(){
     if (gazeCalibStage) gazeCalibStage.style.display = 'none';
-
-    const valid = gazeCalibSamples.filter(s => s && s.found && Number.isFinite(s.xNorm) && Number.isFinite(s.yNorm));
-    if (valid.length < 5){
-      gazeCalibration = null;
-      alert('הכיול לא הצליח לזהות מספיק דגימות אישון. נתחיל את המשימה בכל זאת, אך נתוני ON/OFF יסומנו כ-UNKNOWN עד כיול תקין.');
-    } else {
-      const xs = valid.map(s => s.xNorm).sort((a,b)=>a-b);
-      const ys = valid.map(s => s.yNorm).sort((a,b)=>a-b);
-
-      function q(arr, p){
-        if (!arr.length) return null;
-        const idx = Math.max(0, Math.min(arr.length - 1, Math.round((arr.length - 1) * p)));
-        return arr[idx];
-      }
-
-      // Use percentile range to reduce the influence of noisy calibration samples.
-      const xLow = q(xs, 0.10);
-      const xHigh = q(xs, 0.90);
-      const yLow = q(ys, 0.10);
-      const yHigh = q(ys, 0.90);
-
-      const rangeX = Math.max(0.001, xHigh - xLow);
-      const rangeY = Math.max(0.001, yHigh - yLow);
-
-      // Strict margin: enough tolerance for noise, but not so wide that looking away is still counted as on-screen.
-      const marginX = Math.max(0.025, rangeX * 0.18);
-      const marginY = Math.max(0.025, rangeY * 0.18);
-
-      gazeCalibration = {
-        minX: Math.max(0, xLow - marginX),
-        maxX: Math.min(1, xHigh + marginX),
-        minY: Math.max(0, yLow - marginY),
-        maxY: Math.min(1, yHigh + marginY),
-        xLow, xHigh, yLow, yHigh,
-        marginX, marginY,
-        sampleCount: valid.length,
-        createdAtISO: new Date().toISOString()
-      };
-      setCameraStatus(`CALIBRATED STRICT | xRange=${gazeCalibration.minX.toFixed(3)}-${gazeCalibration.maxX.toFixed(3)} | yRange=${gazeCalibration.minY.toFixed(3)}-${gazeCalibration.maxY.toFixed(3)} | samples=${gazeCalibration.sampleCount}`);
-    }
-
+    setCameraStatus('WEBGAZER: calibration complete | starting task');
     finishCalibrationFlow();
   }
 
   function recordGazeCalibrationClick(){
-    if (pupilState && pupilState.found){
-      gazeCalibSamples.push({
-        pointIndex: gazeCalibIndex,
-        clickIndex: gazeCalibClicks + 1,
-        xNorm: pupilState.xNorm,
-        yNorm: pupilState.yNorm,
-        confidence: pupilState.confidence,
-        found: true
-      });
-    } else {
-      gazeCalibSamples.push({
-        pointIndex: gazeCalibIndex,
-        clickIndex: gazeCalibClicks + 1,
-        xNorm: null,
-        yNorm: null,
-        confidence: 0,
-        found: false
-      });
-    }
+    const p = GAZE_CALIB_POINTS[gazeCalibIndex];
+    const sp = getCalibrationScreenPoint(p);
+
+    try {
+      if (window.webgazer && typeof window.webgazer.recordScreenPosition === 'function'){
+        window.webgazer.recordScreenPosition(sp.x, sp.y, 'click');
+        // Repeat slightly to strengthen calibration at this exact point.
+        window.webgazer.recordScreenPosition(sp.x, sp.y, 'click');
+      }
+    } catch {}
+
+    gazeCalibSamples.push({
+      pointIndex: gazeCalibIndex,
+      clickIndex: gazeCalibClicks + 1,
+      screenX: Math.round(sp.x),
+      screenY: Math.round(sp.y)
+    });
 
     gazeCalibClicks += 1;
     if (gazeCalibClicks >= GAZE_CALIB_CLICKS_PER_POINT){
@@ -1325,123 +1321,6 @@ const DOT_RADIUS = 14;
     }
   }
 
-
-  function stopPupilTracking(){
-    pupilTrackingRunning = false;
-    if (pupilRafId) cancelAnimationFrame(pupilRafId);
-    pupilRafId = null;
-    if (pupilCanvas) pupilCanvas.style.display = 'none';
-    pupilState = { ts:null, found:false, xNorm:null, yNorm:null, confidence:0, darkPixelCount:0 };
-  }
-
-  function startPupilTracking(){
-    if (!video || !pupilCanvas || !pupilCtx) return;
-    pupilTrackingRunning = true;
-    pupilCanvas.style.display = 'block';
-
-    const step = () => {
-      if (!pupilTrackingRunning || !cameraReady || !video.videoWidth || !video.videoHeight){
-        pupilRafId = requestAnimationFrame(step);
-        return;
-      }
-
-      const vw = video.videoWidth;
-      const vh = video.videoHeight;
-
-      // Approximate eye-band ROI: central upper part of the face image.
-      // This is intentionally simple and local. Later we can replace this with WebGazer/MediaPipe if needed.
-      const roi = {
-        x: Math.round(vw * 0.22),
-        y: Math.round(vh * 0.22),
-        w: Math.round(vw * 0.56),
-        h: Math.round(vh * 0.22)
-      };
-
-      pupilCtx.clearRect(0,0,pupilCanvas.width,pupilCanvas.height);
-      pupilCtx.drawImage(video, roi.x, roi.y, roi.w, roi.h, 0, 0, pupilCanvas.width, pupilCanvas.height);
-
-      const img = pupilCtx.getImageData(0, 0, pupilCanvas.width, pupilCanvas.height);
-      const data = img.data;
-
-      let sumX = 0, sumY = 0, count = 0;
-      let minLum = 255, maxLum = 0;
-
-      // First pass: luminance range in the ROI
-      for (let i=0; i<data.length; i+=4){
-        const lum = 0.299*data[i] + 0.587*data[i+1] + 0.114*data[i+2];
-        if (lum < minLum) minLum = lum;
-        if (lum > maxLum) maxLum = lum;
-      }
-
-      // Adaptive threshold: pick very dark pixels, but avoid making the entire ROI "pupil"
-      const threshold = Math.min(85, minLum + Math.max(18, (maxLum - minLum) * 0.18));
-
-      for (let y=0; y<pupilCanvas.height; y++){
-        for (let x=0; x<pupilCanvas.width; x++){
-          const idx = (y*pupilCanvas.width + x) * 4;
-          const lum = 0.299*data[idx] + 0.587*data[idx+1] + 0.114*data[idx+2];
-          if (lum <= threshold){
-            sumX += x;
-            sumY += y;
-            count++;
-            // Mark detected dark pixels faintly on the debug canvas
-            data[idx] = 80;
-            data[idx+1] = 170;
-            data[idx+2] = 255;
-          }
-        }
-      }
-
-      pupilCtx.putImageData(img, 0, 0);
-
-      const minCount = 12;
-      const maxCount = pupilCanvas.width * pupilCanvas.height * 0.35;
-      const found = count >= minCount && count <= maxCount;
-
-      if (found){
-        const cx = sumX / count;
-        const cy = sumY / count;
-        const xNorm = cx / pupilCanvas.width;
-        const yNorm = cy / pupilCanvas.height;
-        const confidence = Math.max(0, Math.min(1, count / 450));
-
-        pupilCtx.beginPath();
-        pupilCtx.arc(cx, cy, 7, 0, Math.PI*2);
-        pupilCtx.lineWidth = 2;
-        pupilCtx.strokeStyle = 'rgba(255,255,255,.95)';
-        pupilCtx.stroke();
-
-        pupilState = {
-          ts: Date.now(),
-          found: true,
-          xNorm: Math.round(xNorm * 1000) / 1000,
-          yNorm: Math.round(yNorm * 1000) / 1000,
-          confidence: Math.round(confidence * 1000) / 1000,
-          darkPixelCount: count
-        };
-
-        classifyGazeFromPupil();
-        setCameraStatus(`CAMERA: ON | PUPIL: TRACKING | GAZE: ${gazeState.reason || 'CALIBRATING'} | x=${pupilState.xNorm}, y=${pupilState.yNorm}, conf=${pupilState.confidence}`);
-      } else {
-        pupilState = {
-          ts: Date.now(),
-          found: false,
-          xNorm: null,
-          yNorm: null,
-          confidence: 0,
-          darkPixelCount: count
-        };
-        classifyGazeFromPupil();
-        setCameraStatus(`CAMERA: ON | PUPIL: NOT FOUND | GAZE: UNKNOWN | darkPixels=${count}`);
-      }
-
-      pupilRafId = requestAnimationFrame(step);
-    };
-
-    pupilRafId = requestAnimationFrame(step);
-  }
-
-
   function setCameraStatus(msg){
     if (cameraStatus){
       cameraStatus.style.display = 'block';
@@ -1451,71 +1330,11 @@ const DOT_RADIUS = 14;
   }
 
   async function initCameraOnly(){
-    setCameraStatus('CAMERA: requesting permission...');
-
-    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
-      throw new Error('getUserMedia is not supported in this browser');
-    }
-
-    stopCameraOnly();
-
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-    } catch (err) {
-      setCameraStatus('CAMERA ERROR: ' + (err.name || 'Error') + ' - ' + (err.message || ''));
-      throw err;
-    }
-
-    cameraStream = stream;
-    video.srcObject = stream;
-    video.style.display = 'block'; // hidden off-screen; used only for processing
-    setCameraStatus('CAMERA: stream received, starting video...');
-
-    try {
-      await video.play();
-    } catch (err) {
-      setCameraStatus('CAMERA ERROR: video.play failed - ' + (err.message || err.name || err));
-      throw err;
-    }
-
-    cameraReady = true;
-    setCameraStatus('CAMERA: ON | starting pupil tracking...');
-    startPupilTracking();
-    gazeState = {
-      tsPerf: performance.now(),
-      attention: 'CAMERA_ON',
-      reason: 'CAMERA_ON',
-      x: null,
-      y: null,
-      ok: true
-    };
+    await initWebGazerTracking();
   }
 
   function stopCameraOnly(){
-    stopPupilTracking();
-    cameraReady = false;
-    try {
-      if (cameraStream){
-        cameraStream.getTracks().forEach(track => track.stop());
-      }
-    } catch {}
-    cameraStream = null;
-    try {
-      if (video){
-        video.pause();
-        video.srcObject = null;
-        video.style.display = 'none';
-      }
-    } catch {}
-    gazeState = {
-      tsPerf: null,
-      attention: 'WAITING',
-      reason: 'WAITING',
-      x: null,
-      y: null,
-      ok: false
-    };
+    stopWebGazerTracking();
   }
 
   function positionCalibDot(){
