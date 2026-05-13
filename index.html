@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V8_JSPSYCH_FORK</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V9_INSET_CALIBRATION</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -288,7 +288,7 @@ const DOT_RADIUS = 14;
 
 
   const MIN_DIST = 52;
-  const EDGE_PAD = 72; // aligned with calibration bounds
+  const EDGE_PAD = 110; // aligned with calibration bounds; inset for clickable calibration points
   const MAX_TRIES = 5000;
 
   // Timeline sampling
@@ -396,15 +396,15 @@ const DOT_RADIUS = 14;
 
   let gazeCalibration = null;
   const GAZE_CALIB_POINTS = [
-    {x:0.00,y:0.00,label:'שמאל למעלה'},
-    {x:0.50,y:0.00,label:'למעלה במרכז'},
-    {x:1.00,y:0.00,label:'ימין למעלה'},
-    {x:0.00,y:0.50,label:'שמאל במרכז'},
+    {x:0.04,y:0.04,label:'שמאל למעלה'},
+    {x:0.50,y:0.04,label:'למעלה במרכז'},
+    {x:0.96,y:0.04,label:'ימין למעלה'},
+    {x:0.04,y:0.50,label:'שמאל במרכז'},
     {x:0.50,y:0.50,label:'מרכז המסך'},
-    {x:1.00,y:0.50,label:'ימין במרכז'},
-    {x:0.00,y:1.00,label:'שמאל למטה'},
-    {x:0.50,y:1.00,label:'למטה במרכז'},
-    {x:1.00,y:1.00,label:'ימין למטה'}
+    {x:0.96,y:0.50,label:'ימין במרכז'},
+    {x:0.04,y:0.96,label:'שמאל למטה'},
+    {x:0.50,y:0.96,label:'למטה במרכז'},
+    {x:0.96,y:0.96,label:'ימין למטה'}
   ];
   const GAZE_CALIB_CLICKS_PER_POINT = 4;
   let gazeCalibIndex = 0;
@@ -468,9 +468,12 @@ const DOT_RADIUS = 14;
 
   function getCalibrationScreenPoint(p){
     const b = getTaskBounds();
+    const pad = 34; // keeps the clickable dot fully inside the visible browser viewport
+    const x = b.left + b.width * p.x;
+    const y = b.top + b.height * p.y;
     return {
-      x: b.left + b.width * p.x,
-      y: b.top + b.height * p.y
+      x: Math.max(pad, Math.min(window.innerWidth - pad, x)),
+      y: Math.max(pad, Math.min(window.innerHeight - pad, y))
     };
   }
 
