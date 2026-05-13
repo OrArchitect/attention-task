@@ -188,6 +188,7 @@
 
 <body>
   <div class="topBar">
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">CAMERA_BASIC_V2_NO_WEBGAZER</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -246,23 +247,13 @@
       </div>
     </div>
   </div>
-
-  <div id="calibIntroOverlay" class="calibOverlay" role="dialog" aria-modal="true">
-    <div class="card">
-      <h2>כיול מבט קצר</h2>
-      <p>לפני תחילת המשימה תופיע נקודה כחולה בכמה מקומות על המסך. הסתכלו על הנקודה ולחצו עליה 3 פעמים בכל מיקום.</p>
-      <div class="actions">
-        <button id="btnCalibBegin" class="btn">התחל כיול</button>
-      </div>
-      <div class="statusNote">הכיול קצר ונועד לשפר את דיוק מעקב המבט.</div>
-    </div>
-  </div>
-
-  <div id="calibStage" class="calibStage" aria-hidden="true">
-    <div id="calibDot" class="calibDot"></div>
-  </div>
+</div>
+</div>
 
   <video id="video" class="hiddenCam" playsinline autoplay muted></video>
+  <div id="cameraStatus" style="position:fixed;left:14px;bottom:14px;z-index:20;background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:14px;padding:10px 12px;color:#e6eaf2;font-size:12px;direction:ltr;display:none;max-width:360px;">
+    CAMERA: waiting
+  </div>
 
 <script type="module">
 (() => {
@@ -315,12 +306,13 @@ const DOT_RADIUS = 14;
   const followupOverlay = document.getElementById('followupOverlay');
   const followupMsgEl = document.getElementById('followupMsg');
   const btnFollowup = document.getElementById('btnFollowup');
-  const calibIntroOverlay = document.getElementById('calibIntroOverlay');
-  const btnCalibBegin = document.getElementById('btnCalibBegin');
-  const calibStage = document.getElementById('calibStage');
-  const calibDot = document.getElementById('calibDot');
+  const calibIntroOverlay = null;
+  const btnCalibBegin = null;
+  const calibStage = null;
+  const calibDot = null;
 
   const video = document.getElementById('video');
+  const cameraStatus = document.getElementById('cameraStatus');
 
   // ---- State
   let sessionRunning = false;
@@ -688,7 +680,7 @@ const DOT_RADIUS = 14;
       await initCameraOnly();
     } catch (e){
       console.error(e);
-      alert("יש שגיאה בהפעלת המצלמה. ודא שנתת הרשאה למצלמה ושהעמוד רץ ב-https או localhost.");
+      alert("יש שגיאה בהפעלת המצלמה: " + (e.name || "Error") + " - " + (e.message || "") + "\nודא שנתת הרשאה למצלמה ושהעמוד רץ ב-https או localhost.");
       btnStartInline.disabled = false;
       btnEarly.disabled = true;
       return;
@@ -812,8 +804,8 @@ const DOT_RADIUS = 14;
     log.tasks = [];
 
     timeline.length = 0;
-    calibIntroOverlay.style.display = 'none';
-    calibStage.style.display = 'none';
+    if (calibIntroOverlay) calibIntroOverlay.style.display = 'none';
+    if (calibStage) calibStage.style.display = 'none';
     pendingStartPid = null;
 
     draw();
@@ -1074,42 +1066,45 @@ const DOT_RADIUS = 14;
     };
   }
 
+  function setCameraStatus(msg){
+    if (cameraStatus){
+      cameraStatus.style.display = 'block';
+      cameraStatus.textContent = msg;
+    }
+    console.log('[CAMERA_BASIC_V2]', msg);
+  }
+
   async function initCameraOnly(){
+    setCameraStatus('CAMERA: requesting permission...');
+
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
       throw new Error('getUserMedia is not supported in this browser');
     }
 
-    // Stop any previous stream before starting a new one
     stopCameraOnly();
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: 'user',
-        width: { ideal: 640 },
-        height: { ideal: 480 }
-      },
-      audio: false
-    });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+    } catch (err) {
+      setCameraStatus('CAMERA ERROR: ' + (err.name || 'Error') + ' - ' + (err.message || ''));
+      throw err;
+    }
 
     cameraStream = stream;
     video.srcObject = stream;
     video.style.display = 'block';
+    setCameraStatus('CAMERA: stream received, starting video...');
 
-    await new Promise((resolve, reject) => {
-      const done = () => resolve();
-      const fail = () => reject(new Error('video failed to start'));
-      video.onloadedmetadata = done;
-      video.onerror = fail;
-      try {
-        const playResult = video.play();
-        if (playResult && typeof playResult.then === 'function') {
-          playResult.then(resolve).catch(reject);
-        }
-      } catch (e) { reject(e); }
-      setTimeout(resolve, 1200);
-    });
+    try {
+      await video.play();
+    } catch (err) {
+      setCameraStatus('CAMERA ERROR: video.play failed - ' + (err.message || err.name || err));
+      throw err;
+    }
 
     cameraReady = true;
+    setCameraStatus('CAMERA: ON');
     gazeState = {
       tsPerf: performance.now(),
       attention: 'CAMERA_ON',
@@ -1155,13 +1150,13 @@ const DOT_RADIUS = 14;
   function startCalibrationFlow(){
     calibPointIndex = 0;
     calibClicksOnPoint = 0;
-    calibIntroOverlay.style.display = 'none';
-    calibStage.style.display = 'block';
+    if (calibIntroOverlay) calibIntroOverlay.style.display = 'none';
+    if (calibStage) calibStage.style.display = 'block';
     positionCalibDot();
   }
 
   function finishCalibrationFlow(){
-    calibStage.style.display = 'none';
+    if (calibStage) calibStage.style.display = 'none';
     const pid = pendingStartPid;
     pendingStartPid = null;
 
