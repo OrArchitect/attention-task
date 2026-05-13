@@ -181,7 +181,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V5_LIVE_INDICATOR</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V6_SAFE_START</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -1269,23 +1269,45 @@ const DOT_RADIUS = 14;
     }
 
     try {
-      if (typeof window.webgazer.end === 'function') {
-        try { window.webgazer.end(); } catch {}
-      }
+      // Do not call webgazer.end() here. In some builds it throws "t is not a function"
+      // when called before the tracker is fully initialized.
       if (typeof window.webgazer.clearData === 'function') {
         try { window.webgazer.clearData(); } catch {}
       }
       if (typeof window.webgazer.saveDataAcrossSessions === 'function') {
-        window.webgazer.saveDataAcrossSessions(false);
+        try { window.webgazer.saveDataAcrossSessions(false); } catch {}
       }
-      if (typeof window.webgazer.showVideoPreview === 'function') window.webgazer.showVideoPreview(false);
-      if (typeof window.webgazer.showPredictionPoints === 'function') window.webgazer.showPredictionPoints(false);
-      if (typeof window.webgazer.showFaceOverlay === 'function') window.webgazer.showFaceOverlay(false);
-      if (typeof window.webgazer.showFaceFeedbackBox === 'function') window.webgazer.showFaceFeedbackBox(false);
-      if (typeof window.webgazer.applyKalmanFilter === 'function') window.webgazer.applyKalmanFilter(true);
+      if (typeof window.webgazer.showVideoPreview === 'function') {
+        try { window.webgazer.showVideoPreview(false); } catch {}
+      }
+      if (typeof window.webgazer.showPredictionPoints === 'function') {
+        try { window.webgazer.showPredictionPoints(false); } catch {}
+      }
+      if (typeof window.webgazer.showFaceOverlay === 'function') {
+        try { window.webgazer.showFaceOverlay(false); } catch {}
+      }
+      if (typeof window.webgazer.showFaceFeedbackBox === 'function') {
+        try { window.webgazer.showFaceFeedbackBox(false); } catch {}
+      }
+      if (typeof window.webgazer.applyKalmanFilter === 'function') {
+        try { window.webgazer.applyKalmanFilter(true); } catch {}
+      }
 
+      if (typeof window.webgazer.setGazeListener !== 'function') {
+        throw new Error('WebGazer setGazeListener is unavailable');
+      }
       window.webgazer.setGazeListener((data) => classifyGazeFromPrediction(data));
-      await window.webgazer.begin();
+
+      if (typeof window.webgazer.begin !== 'function') {
+        throw new Error('WebGazer begin is unavailable');
+      }
+
+      const beginResult = window.webgazer.begin();
+      if (beginResult && typeof beginResult.then === 'function') {
+        await beginResult;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 1200));
+      }
 
       cameraReady = true;
       updateGazeBadge('WAITING', 'CALIBRATE');
@@ -1300,7 +1322,7 @@ const DOT_RADIUS = 14;
             classifyGazeFromPrediction(pred);
           }
         } catch (e) {
-          // keep listener as primary source
+          // Listener remains the primary source.
         }
 
         if (Date.now() - lastPredictionAt > 2500 && sessionRunning){
@@ -1334,8 +1356,12 @@ const DOT_RADIUS = 14;
     }
     if (gazeLiveBadge) gazeLiveBadge.style.display = 'none';
     try {
-      if (window.webgazer && typeof window.webgazer.end === 'function') window.webgazer.end();
-    } catch {}
+      if (window.webgazer && typeof window.webgazer.end === 'function') {
+        window.webgazer.end();
+      }
+    } catch (e) {
+      console.warn('[WEBGAZER_V6] webgazer.end ignored:', e);
+    }
     gazeState = {
       tsPerf: null,
       attention: "WAITING",
@@ -1412,7 +1438,7 @@ const DOT_RADIUS = 14;
       cameraStatus.style.display = 'block';
       cameraStatus.textContent = msg;
     }
-    console.log('[CAMERA_BASIC_V2]', msg);
+    console.log('[WEBGAZER_V6]', msg);
   }
 
   async function initCameraOnly(){
