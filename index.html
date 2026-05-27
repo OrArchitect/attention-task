@@ -189,7 +189,7 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V12_WIDER_TASK_CALIBRATION</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V13_SIMPLIFIED_ERROR_SUMMARY</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
@@ -942,6 +942,47 @@ const DOT_RADIUS = 14;
     return '\uFEFF' + rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
   }
 
+  function getTaskErrorBreakdown(t){
+    const attempts = t.attempts || [];
+    let wrongSelections = 0;
+    let correctedWrongSelections = 0;
+    let failedAttemptsCompletedWrong = 0;
+
+    for (const a of attempts){
+      const clicks = a.clicks || [];
+      const openWrongSelections = [];
+
+      for (const c of clicks){
+        if (c.action === 'toggle_on' && c.isWrongSelection === true){
+          wrongSelections += 1;
+          openWrongSelections.push({ dot: c.hitDotIndex, corrected: false });
+        }
+
+        if (c.action === 'toggle_off'){
+          // A correction is counted when a previously wrong dot selection
+          // in the same attempt is actively cancelled by clicking it again.
+          const rec = openWrongSelections.find(x => x.dot === c.hitDotIndex && !x.corrected);
+          if (rec){
+            rec.corrected = true;
+            correctedWrongSelections += 1;
+          }
+        }
+      }
+
+      if (a.success === false && a.endReason === 'completed_wrong'){
+        failedAttemptsCompletedWrong += 1;
+      }
+    }
+
+    return {
+      wrongSelections,
+      correctedWrongSelections,
+      uncorrectedWrongSelections: Math.max(0, wrongSelections - correctedWrongSelections),
+      failedAttemptsCompletedWrong,
+      taskRepeatsRequired: failedAttemptsCompletedWrong
+    };
+  }
+
   function buildReportCSVString(){
     const header = [
       'participantId',
@@ -949,19 +990,28 @@ const DOT_RADIUS = 14;
       'sessionEndedAtISO',
       'endedReason',
       'totalScreensCompleted',
-      'totalWrongDotSelections',
+      'totalWrongSelections',
+      'totalTaskRepeatsRequired',
       'taskNumber',
       'taskCompleted',
       'taskDurationMs',
       'taskDurationSec',
-      'wrongDotSelectionsInTask',
+      'wrongSelectionsInTask',
+      'correctedWrongSelectionsInTask',
+      'uncorrectedWrongSelectionsInTask',
+      'taskRepeatsRequiredInTask',
       'correctPointsReached',
       'attemptsInTask'
     ];
     const rows = [header];
 
+    const totalTaskRepeatsRequired = (log.tasks || []).reduce((sum, t) => {
+      return sum + getTaskErrorBreakdown(t).taskRepeatsRequired;
+    }, 0);
+
     for (const t of log.tasks){
       if (!t.startedAtMs) continue;
+      const err = getTaskErrorBreakdown(t);
       rows.push([
         log.meta.pid || '',
         log.session.startedAtISO || '',
@@ -969,11 +1019,15 @@ const DOT_RADIUS = 14;
         log.session.endedReason || '',
         log.session.totalTasksCompleted || 0,
         log.session.totalWrongDotSelections || 0,
+        totalTaskRepeatsRequired,
         t.taskIndex,
         t.completed ? 'TRUE' : 'FALSE',
         typeof t.durationMs === 'number' ? t.durationMs : '',
         typeof t.durationMs === 'number' ? Math.round((t.durationMs/1000)*1000)/1000 : '',
-        t.wrongDotSelections || 0,
+        err.wrongSelections,
+        err.correctedWrongSelections,
+        err.uncorrectedWrongSelections,
+        err.taskRepeatsRequired,
         t.correctPointsReached || 0,
         (t.attempts || []).length
       ]);
