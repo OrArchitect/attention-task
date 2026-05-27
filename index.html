@@ -301,6 +301,7 @@ const DOT_RADIUS = 14;
 
   // Timeline sampling
   const TIMELINE_DT_MS = 100;
+  const OFFSCREEN_LONG_EVENT_MS = 1000; // OFFSCREEN events at/above this duration are flagged for review
 
   // ---- Drive Upload (Google Apps Script Web App)
   const DRIVE_WEBAPP_URL = "https://script.google.com/macros/s/AKfycbzzL6_C4miqkMb46vs9qVYRnp1_uzq1ZdrSR7fk-J8s1HBIxwN-ad3OAQrNAAd6PHd2/exec";
@@ -844,12 +845,14 @@ const DOT_RADIUS = 14;
 
     const gazeTimelineCsv = buildTimelineCSVString();
     const gazeSummaryCsv = buildOffSummaryCSVString();
+    const offscreenEventsCsv = buildOffscreenEventsCSVString();
     const taskSummaryCsv = buildReportCSVString();
     const pointEventsCsv = buildPointEventsCSVString();
 
     const filesToSend = [
       { filename: `${pidSafe}_gaze_timeline_${ts}.csv`,     mimeType: "text/csv;charset=utf-8", content: gazeTimelineCsv },
       { filename: `${pidSafe}_gaze_summary_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: gazeSummaryCsv },
+      { filename: `${pidSafe}_offscreen_events_${ts}.csv`,  mimeType: "text/csv;charset=utf-8", content: offscreenEventsCsv },
       { filename: `${pidSafe}_task_summary_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: taskSummaryCsv },
       { filename: `${pidSafe}_point_events_${ts}.csv`,      mimeType: "text/csv;charset=utf-8", content: pointEventsCsv }
     ];
@@ -1077,17 +1080,85 @@ const DOT_RADIUS = 14;
     return rowsToCSV(rows);
   }
 
+  function buildOffscreenEvents(){
+    const events = [];
+    const openByTask = new Map();
+
+    for (const r of timeline){
+      const taskKey = String(r.taskNumber ?? "");
+      if (!taskKey) continue;
+
+      const onoff = String(r["onScreen/Offscreen"] || "");
+      const tSession = Number(r.tFromSessionMs);
+      const tTask = Number(r.tFromTaskMs);
+      const taskEventsSoFar = events.filter(e => String(e.taskNumber) === taskKey).length;
+
+      if (onoff === "OFFSCREEN"){
+        if (!openByTask.has(taskKey)){
+          openByTask.set(taskKey, {
+            taskNumber: taskKey,
+            offscreenEventNumber: taskEventsSoFar + 1,
+            startFromSessionMs: Number.isFinite(tSession) ? tSession : "",
+            startFromTaskMs: Number.isFinite(tTask) ? tTask : "",
+            endFromSessionMs: Number.isFinite(tSession) ? tSession + TIMELINE_DT_MS : "",
+            endFromTaskMs: Number.isFinite(tTask) ? tTask + TIMELINE_DT_MS : "",
+            sampleCount: 0
+          });
+        }
+        const ev = openByTask.get(taskKey);
+        ev.sampleCount += 1;
+        ev.endFromSessionMs = Number.isFinite(tSession) ? tSession + TIMELINE_DT_MS : ev.endFromSessionMs;
+        ev.endFromTaskMs = Number.isFinite(tTask) ? tTask + TIMELINE_DT_MS : ev.endFromTaskMs;
+      } else if (openByTask.has(taskKey)){
+        const ev = openByTask.get(taskKey);
+        ev.durationMs = ev.sampleCount * TIMELINE_DT_MS;
+        ev.durationSec = Math.round((ev.durationMs / 1000) * 1000) / 1000;
+        ev.longOffscreen = ev.durationMs >= OFFSCREEN_LONG_EVENT_MS;
+        ev.reviewFlag = ev.longOffscreen ? "🔴 REVIEW_LONG_OFFSCREEN" : "";
+        events.push(ev);
+        openByTask.delete(taskKey);
+      }
+    }
+
+    for (const ev of openByTask.values()){
+      ev.durationMs = ev.sampleCount * TIMELINE_DT_MS;
+      ev.durationSec = Math.round((ev.durationMs / 1000) * 1000) / 1000;
+      ev.longOffscreen = ev.durationMs >= OFFSCREEN_LONG_EVENT_MS;
+      ev.reviewFlag = ev.longOffscreen ? "🔴 REVIEW_LONG_OFFSCREEN" : "";
+      events.push(ev);
+    }
+
+    return events.sort((a,b) => {
+      const at = Number(a.taskNumber), bt = Number(b.taskNumber);
+      if (Number.isFinite(at) && Number.isFinite(bt) && at !== bt) return at - bt;
+      return (a.startFromSessionMs || 0) - (b.startFromSessionMs || 0);
+    });
+  }
+
   function buildTimelineCSVString(){
-    const header = ['taskNumber','tFromSessionMs','tFromTaskMs','timeHundredths','onScreen/Offscreen','connections'];
+    const offEvents = buildOffscreenEvents();
+    const header = ['taskNumber','tFromSessionMs','tFromTaskMs','timeHundredths','onScreen/Offscreen','offscreenEventNumber','offscreenEventDurationMs','longOffscreenEventOver1Sec','reviewFlag','connections'];
     const rows = [header];
 
     for (const r of timeline){
+      const tSession = Number(r.tFromSessionMs);
+      const matchingEvent = offEvents.find(ev =>
+        String(ev.taskNumber) === String(r.taskNumber ?? "") &&
+        Number.isFinite(tSession) &&
+        tSession >= Number(ev.startFromSessionMs) &&
+        tSession < Number(ev.endFromSessionMs)
+      );
+
       rows.push([
         r.taskNumber,
         r.tFromSessionMs,
         r.tFromTaskMs,
         r.timeHundredths,
         r["onScreen/Offscreen"],
+        matchingEvent ? matchingEvent.offscreenEventNumber : '',
+        matchingEvent ? matchingEvent.durationMs : '',
+        matchingEvent ? (matchingEvent.longOffscreen ? 'TRUE' : 'FALSE') : '',
+        matchingEvent ? matchingEvent.reviewFlag : '',
         r.connections
       ]);
     }
@@ -1102,6 +1173,41 @@ const DOT_RADIUS = 14;
     return '\uFEFF' + csv;
   }
 
+  function buildOffscreenEventsCSVString(){
+    const header = [
+      'participantId',
+      'taskNumber',
+      'offscreenEventNumber',
+      'startFromSessionMs',
+      'endFromSessionMs',
+      'startFromTaskMs',
+      'endFromTaskMs',
+      'durationMs',
+      'durationSec',
+      'longOffscreenEventOver1Sec',
+      'reviewFlag'
+    ];
+    const rows = [header];
+
+    for (const ev of buildOffscreenEvents()){
+      rows.push([
+        log.meta.pid || '',
+        ev.taskNumber,
+        ev.offscreenEventNumber,
+        ev.startFromSessionMs,
+        ev.endFromSessionMs,
+        ev.startFromTaskMs,
+        ev.endFromTaskMs,
+        ev.durationMs,
+        ev.durationSec,
+        ev.longOffscreen ? 'TRUE' : 'FALSE',
+        ev.reviewFlag
+      ]);
+    }
+
+    return rowsToCSV(rows);
+  }
+
   function buildOffSummaryCSVString(){
     const byTask = new Map();
 
@@ -1114,7 +1220,10 @@ const DOT_RADIUS = 14;
           onTimeMs: 0,
           offTimeMs: 0,
           unknownTimeMs: 0,
-          offEvents: 0
+          offEvents: 0,
+          longOffEvents: 0,
+          offEventDurationsMs: [],
+          longOffEventDurationsMs: []
         });
       }
       return byTask.get(key);
@@ -1137,6 +1246,16 @@ const DOT_RADIUS = 14;
       const rec = ensureTask(taskKey);
       if (!rec.totalTimePerTaskMs || rec.totalTimePerTaskMs === 0){
         rec.totalTimePerTaskMs = mx;
+      }
+    }
+
+    const offEvents = buildOffscreenEvents();
+    for (const ev of offEvents){
+      const rec = ensureTask(ev.taskNumber);
+      rec.offEventDurationsMs.push(ev.durationMs);
+      if (ev.longOffscreen){
+        rec.longOffEvents += 1;
+        rec.longOffEventDurationsMs.push(ev.durationMs);
       }
     }
 
@@ -1172,7 +1291,11 @@ const DOT_RADIUS = 14;
       "TOTAL TIME ONSCREEN MS",
       "TOTAL TIME OFFSCREEN MS",
       "TOTAL TIME UNKNOWN MS",
-      "NO OF OFFSCREEN EVENTS"
+      "NO OF OFFSCREEN EVENTS",
+      "OFFSCREEN EVENT DURATIONS MS",
+      "NO OF LONG OFFSCREEN EVENTS >= 1000MS",
+      "LONG OFFSCREEN EVENT DURATIONS MS",
+      "REVIEW FLAG"
     ];
 
     const rows = [header];
@@ -1191,7 +1314,11 @@ const DOT_RADIUS = 14;
         t.onTimeMs,
         t.offTimeMs,
         t.unknownTimeMs,
-        t.offEvents
+        t.offEvents,
+        (t.offEventDurationsMs || []).join(';'),
+        t.longOffEvents || 0,
+        (t.longOffEventDurationsMs || []).join(';'),
+        (t.longOffEvents || 0) > 0 ? '🔴 REVIEW_LONG_OFFSCREEN' : ''
       ]);
     }
 
