@@ -189,11 +189,27 @@
 
 <body>
   <div class="topBar">
-    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V14_OFFSCREEN_EVENT_CLUSTERS</span>
+    <span id="versionBadge" style="align-self:center;color:#9aa6bf;font-size:12px;padding:0 8px;">WEBGAZER_ONOFF_V15_INTRO_VIDEO_CALIB_COUNTER</span>
     <button id="btnEarly" class="btn early" disabled>סיום מוקדם</button>
   </div>
 
-  <div id="pidOverlay" class="pidOverlay">
+
+  <div id="introVideoOverlay" class="overlay" role="dialog" aria-modal="true" style="display:flex; z-index:40;">
+    <div class="card" style="width:min(920px, calc(100% - 28px));">
+      <h2>ברוכים הבאים למחקר</h2>
+      <p>לפני ההוראות הכתובות, צפו בסרטון ההסבר הקצר. לאחר סיום הסרטון ניתן יהיה להמשיך.</p>
+      <video id="introVideo" controls playsinline preload="metadata" style="width:100%; max-height:65vh; border-radius:16px; background:#000; display:block;">
+        <source src="intro.mp4" type="video/mp4">
+        הדפדפן אינו תומך בהצגת וידאו.
+      </video>
+      <div class="actions" style="margin-top:14px;">
+        <button id="btnIntroContinue" class="btn" disabled>המשך להוראות</button>
+      </div>
+      <div id="introVideoHint" class="pidHint">הכפתור יופעל לאחר שהסרטון יסתיים.</div>
+    </div>
+  </div>
+
+  <div id="pidOverlay" class="pidOverlay" style="display:none;">
     
     <div class="pidCard">
       <h2>לפני שמתחילים</h2>
@@ -264,6 +280,7 @@
 
   <div id="gazeCalibStage" style="position:fixed;inset:0;z-index:30;display:none;pointer-events:none;">
     <div id="gazeCalibDot" style="position:absolute;width:44px;height:44px;border-radius:999px;background:#7aaaff;box-shadow:0 0 0 16px rgba(122,170,255,.24);transform:translate(-50%,-50%);cursor:pointer;pointer-events:auto;"></div>
+    <div id="gazeCalibCounter" style="position:absolute;min-width:54px;text-align:center;padding:7px 10px;border-radius:999px;background:rgba(15,26,46,.95);border:1px solid rgba(255,255,255,.18);color:#e6eaf2;font-size:15px;font-weight:800;direction:ltr;box-shadow:0 10px 24px rgba(0,0,0,.35);transform:translate(-50%,-50%);pointer-events:none;">4/4</div>
     <div id="gazeCalibText" style="position:fixed;left:50%;top:18px;transform:translateX(-50%);background:rgba(15,26,46,.92);border:1px solid rgba(255,255,255,.14);border-radius:999px;padding:10px 16px;color:#e6eaf2;font-size:14px;">Calibration</div>
   </div>
 
@@ -324,6 +341,11 @@ const DOT_RADIUS = 14;
   const btnStartInline = document.getElementById('btnStartInline');
   const btnEarly = document.getElementById('btnEarly');
 
+  const introVideoOverlay = document.getElementById('introVideoOverlay');
+  const introVideo = document.getElementById('introVideo');
+  const btnIntroContinue = document.getElementById('btnIntroContinue');
+  const introVideoHint = document.getElementById('introVideoHint');
+
   const taskOverlay = document.getElementById('taskOverlay');
   const btnContinue = document.getElementById('btnContinue');
 
@@ -340,6 +362,7 @@ const DOT_RADIUS = 14;
   const btnGazeCalibBegin = document.getElementById('btnGazeCalibBegin');
   const gazeCalibStage = document.getElementById('gazeCalibStage');
   const gazeCalibDot = document.getElementById('gazeCalibDot');
+  const gazeCalibCounter = document.getElementById('gazeCalibCounter');
   const gazeCalibText = document.getElementById('gazeCalibText');
   const cameraStatus = document.getElementById('cameraStatus');
   const gazeLiveBadge = document.getElementById('gazeLiveBadge');
@@ -351,6 +374,7 @@ const DOT_RADIUS = 14;
   let taskActive = false;
   let startAt = null;
   let rafId = null;
+  let introCompleted = false;
 
   // We'll keep the participant PID available for followup link even after resetUI()
   let followupPid = null;
@@ -904,7 +928,7 @@ const DOT_RADIUS = 14;
     currentTask = null;
     currentAttempt = null;
 
-    pidOverlay.style.display = showPidOverlay ? 'flex' : 'none';
+    pidOverlay.style.display = (showPidOverlay && introCompleted) ? 'flex' : 'none';
     pidEl.disabled = false;
     pidEl.value = '';
     secureWarn.style.display = isSecureEnough() ? "none" : "block";
@@ -1612,7 +1636,15 @@ const DOT_RADIUS = 14;
     const sp = getCalibrationScreenPoint(p);
     gazeCalibDot.style.left = `${sp.x}px`;
     gazeCalibDot.style.top = `${sp.y}px`;
-    gazeCalibText.textContent = `כיול WebGazer: ${p.label} — לחיצה ${gazeCalibClicks + 1}/${GAZE_CALIB_CLICKS_PER_POINT}`;
+
+    const remainingClicks = Math.max(0, GAZE_CALIB_CLICKS_PER_POINT - gazeCalibClicks);
+    if (gazeCalibCounter){
+      gazeCalibCounter.style.left = `${Math.min(window.innerWidth - 54, sp.x + 58)}px`;
+      gazeCalibCounter.style.top = `${Math.max(162, sp.y - 2)}px`;
+      gazeCalibCounter.textContent = `${remainingClicks}/${GAZE_CALIB_CLICKS_PER_POINT}`;
+    }
+
+    gazeCalibText.textContent = `כיול WebGazer: ${p.label} — נותרו ${remainingClicks}/${GAZE_CALIB_CLICKS_PER_POINT} לחיצות`;
   }
 
   function beginGazeCalibration(){
@@ -1739,6 +1771,32 @@ const DOT_RADIUS = 14;
   });
 
 ;
+
+
+  if (introVideo){
+    introVideo.addEventListener('ended', () => {
+      if (btnIntroContinue) btnIntroContinue.disabled = false;
+      if (introVideoHint) introVideoHint.textContent = 'אפשר להמשיך להוראות הכתובות.';
+    });
+
+    introVideo.addEventListener('play', () => {
+      if (introVideoHint && btnIntroContinue && btnIntroContinue.disabled) {
+        introVideoHint.textContent = 'הכפתור יופעל לאחר שהסרטון יסתיים.';
+      }
+    });
+  }
+
+  if (btnIntroContinue){
+    btnIntroContinue.addEventListener('click', () => {
+      introCompleted = true;
+      if (introVideo){
+        try { introVideo.pause(); } catch {}
+      }
+      if (introVideoOverlay) introVideoOverlay.style.display = 'none';
+      if (pidOverlay) pidOverlay.style.display = 'flex';
+      try { pidEl.dispatchEvent(new Event('input')); } catch {}
+    });
+  }
 
   btnStartInline.addEventListener('click', async () => {
     const pid = (pidEl.value || '').toUpperCase();
